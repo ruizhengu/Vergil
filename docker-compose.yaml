@@ -1,0 +1,127 @@
+services:
+  # Postgres
+  postgres:
+    image: postgres:15
+    container_name: postgres15
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - ./.pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    command: [ "postgres", "-c", "listen_addresses=*"]
+  
+  # Pgadmin
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${pg_admin_email}
+      - PGADMIN_DEFAULT_PASSWORD=${pg_admin_password}
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    
+  # MCP Server 
+  mcp_server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.server
+    container_name: mcp_server
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./services/mcp_server/src/contracts:/app/src/contracts
+      - ./node_modules:/app/node_modules
+    environment:
+      - METAMASK_PRIVATE_KEY=${METAMASK_PRIVATE_KEY}
+      - ETHEREUM_SEPOLIA_RPC=${ETHEREUM_SEPOLIA_RPC}
+      - wallet_address=${wallet_address}
+    networks:
+      - graphite_network
+  
+  # Backend 
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: backend_api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - mcp_server
+      - phoenix
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      - MCP_SERVER_URL=${MCP_SERVER_URL}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_HOST=postgres
+      - PHOENIX_ENDPOINT=${PHOENIX_ENDPOINT}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - ETHEREUM_SEPOLIA_RPC=${ETHEREUM_SEPOLIA_RPC}
+      - METAMASK_PRIVATE_KEY=${METAMASK_PRIVATE_KEY}
+      - wallet_address=${wallet_address}
+    networks:
+      - graphite_network
+    command: sh -c "sleep 10 && uv run uvicorn main:app --host 0.0.0.0 --port 8000"
+  
+  # Frontend 
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: frontend_app
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    environment:
+      - BACKEND_API_URL=${BACKEND_API_URL}
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=${NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID}
+    networks:
+      - graphite_network
+  
+  # # Grafi Development Server (from graphite-dev repo)
+  # grafi_dev:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/Dockerfile.grafi-dev
+  #   container_name: grafi_dev_server
+  #   ports:
+  #     - "8888:8888"  # Development server port
+  #   volumes:
+  #     - ./src:/app/src  # Mount source code for hot reload
+  #     - ./apps/backend:/app/backend  # Mount backend code
+  #   environment:
+  #     - NODE_ENV=development
+  #     - OPENAI_API_KEY=${OPENAI_API_KEY}
+  #     - OPENAI_MODEL=${OPENAI_MODEL}
+  #     - POSTGRES_DB=${POSTGRES_DB}
+  #     - POSTGRES_USER=${POSTGRES_USER}
+  #     - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+  #     - POSTGRES_HOST=postgres
+  #   depends_on:
+  #     - postgres
+  #   networks:
+  #     - graphite_network
+
+  # Phoenix
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"   # Phoenix UI
+      - "4317:4317"   # OTLP gRPC for tracing
+    networks:
+      - graphite_network
+
+networks:
+  graphite_network:
+    driver: bridge

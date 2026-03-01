@@ -1,0 +1,33 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && apt-get install -y nodejs
+
+RUN pip install uv
+
+ENV UV_SYSTEM_PYTHON=1
+ENV UV_NO_CACHE=1
+ENV UV_NO_PIP=1
+
+COPY pyproject.toml uv.lock ./
+
+RUN rm -rf /app/.venv
+
+RUN uv sync
+
+RUN npm init -y && npm install @openzeppelin/contracts
+
+COPY services/mcp_server/ .
+
+EXPOSE 8081
+
+WORKDIR /app
+CMD ["uv", "run", "src/servers/server.py"]
