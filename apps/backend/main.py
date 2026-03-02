@@ -106,6 +106,7 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:3001",
         "https://vergil-production.up.railway.app",
+        "https://vergil-kappa.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
