@@ -7,28 +7,12 @@ name = "smart-contract-agent"
 [[service]]
 name = "backend"
 dockerfile = "docker/Dockerfile.backend"
-<<<<<<< HEAD
-buildCommand = ""
-startCommand = "uv run uvicorn main:app --host 0.0.0.0 --port $PORT"
-environment = ["OPENAI_API_KEY", "OPENAI_MODEL", "MCP_SERVER_URL", "POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_HOST", "POSTGRES_PORT", "ETHEREUM_SEPOLIA_RPC", "METAMASK_PRIVATE_KEY"]
-=======
 startCommand = "sh -c 'uv run uvicorn main:app --host 0.0.0.0 --port ${PORT}'"
->>>>>>> 9ebc832 (add railway deployment config)
 
 [[service]]
-name = "mcp-server"
+name = "mcp_server"
 dockerfile = "docker/Dockerfile.server"
-<<<<<<< HEAD
-buildCommand = ""
-startCommand = "uv run python -m uvicorn servers.server:app --host 0.0.0.0 --port $PORT"
-environment = ["METAMASK_PRIVATE_KEY", "ETHEREUM_SEPOLIA_RPC", "PORT=8081"]
-
-[deploy]
-region = "us"
-numReplicas = 1
-=======
 startCommand = "sh -c 'uv run python -m uvicorn servers.server:app --host 0.0.0.0 --port ${PORT}'"
 
 [deploy]
 region = "us"
->>>>>>> 9ebc832 (add railway deployment config)
