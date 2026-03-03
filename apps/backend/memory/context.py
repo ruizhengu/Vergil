@@ -88,9 +88,9 @@ def extract_and_dedupe_messages(events) -> list[Message]:
     
     return deduped_messages
 
-def get_conversation_context(conversation_id: str) -> list[Message]:
+async def get_conversation_context(conversation_id: str) -> list[Message]:
     event_store = container.event_store
-    events = event_store.get_conversation_events(conversation_id)
+    events = await event_store.get_conversation_events(conversation_id)
     
     # Extract and deduplicate messages
     messages = extract_and_dedupe_messages(events)
@@ -134,7 +134,7 @@ def get_conversation_context(conversation_id: str) -> list[Message]:
             elif content_info["type"] == "reasoning":
                 # Reasoning response - only include if it doesn't require tools
                 reasoning = content_info["structured_data"]
-                if not reasoning.requires_tool_call and not reasoning.requires_deployment:
+                if not reasoning.requires_compile and not reasoning.requires_deployment and not reasoning.requires_contract_generation:
                     # This reasoning led to a final output, include context
                     summary_msg = Message(
                         role="assistant", 

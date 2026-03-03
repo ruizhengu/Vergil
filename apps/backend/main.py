@@ -1,18 +1,16 @@
 import os
 from datetime import datetime
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from typing import Optional, Dict, Any
+from typing import Dict
 from grafi.common.models.mcp_connections import StreamableHttpConnection
 from grafi.tools.function_calls.impl.mcp_tool import MCPTool
-from agents.react_agent import TrueReActAssistant
+from agents.orchestration_agent import OrchestrationAssistant
+from agents.generate_contract_agent import GenerateContractAssistant
 from contextlib import asynccontextmanager
-from tools.mock_tool import SimpleMockTool
-
 import uvicorn
 import sys
-import os
 
 from routers import chat, tools, contracts, transactions, approval, wallet
 from grafi.common.containers.container import container, setup_tracing
@@ -29,21 +27,11 @@ tracer = setup_tracing(
                 project_name="grafi-trace",
             )
 
-# tool = SimpleMockTool()
-
-# assistant = (TrueReActAssistant.builder()
-#             .name("TrueReActSmartContractAgent")
-#             .model(os.getenv('OPENAI_MODEL', 'gpt-4'))
-#             .api_key(os.getenv("OPENAI_API_KEY", ""))
-#             .function_call_tool(tool)
-#             .build()
-#         )
-
-async def create_react_assistant():
-    """Create the True ReAct Assistant with MCP tools"""
+async def create_orchestration_assistant(generate_contract_assistant=None):
+    """Create the Orchestration Assistant with MCP tools"""
     mcp_server_url = os.getenv('MCP_SERVER_URL', 'http://localhost:8081/mcp/')
     print(f"Connecting to MCP server at: {mcp_server_url}")
-    
+
     mcp_config: Dict[str, StreamableHttpConnection] = {
         "smart-contract-server": StreamableHttpConnection(
             url=mcp_server_url,
@@ -53,24 +41,60 @@ async def create_react_assistant():
 
     try:
         print("Building MCP tool...")
-        mcp_tool = await MCPTool.builder().connections(mcp_config).a_build()
+        mcp_tool = await MCPTool.builder().connections(mcp_config).build()
         print("MCP tool built successfully")
-        
-        print("Building assistant...")
-        assistant = (TrueReActAssistant.builder()
-            .name("TrueReActSmartContractAgent")
+
+        print("Building orchestration assistant...")
+        builder = (OrchestrationAssistant.builder()
+            .name("OrchestrationAgent")
+            .model(os.getenv('OPENAI_MODEL', 'gpt-4o'))
+            .api_key(os.getenv("OPENAI_API_KEY", ""))
+            .function_call_tool(mcp_tool)
+        )
+        if generate_contract_assistant is not None:
+            builder = builder.generate_contract_assistant(generate_contract_assistant)
+        assistant = builder.build()
+        print("Orchestration assistant built successfully")
+
+        return assistant
+    except Exception as e:
+        print(f"Error building orchestration assistant: {e}")
+        print(f"Error type: {type(e)}")
+        raise
+
+async def create_generate_contract_assistant():
+    """Create the Generate Contract Assistant with MCP tools"""
+    mcp_server_url = os.getenv('MCP_SERVER_URL', 'http://localhost:8081/mcp/')
+    print(f"Connecting to MCP server for generate contract agent at: {mcp_server_url}")
+
+    mcp_config: Dict[str, StreamableHttpConnection] = {
+        "smart-contract-server": StreamableHttpConnection(
+            url=mcp_server_url,
+            transport="http"
+        )
+    }
+
+    try:
+        print("Building MCP tool for generate contract agent...")
+        mcp_tool = await MCPTool.builder().connections(mcp_config).build()
+        print("MCP tool built successfully for generate contract agent")
+
+        print("Building generate contract assistant...")
+        assistant = (GenerateContractAssistant.builder()
+            .name("GenerateContractAgent")
             .model(os.getenv('OPENAI_MODEL', 'gpt-4o'))
             .api_key(os.getenv("OPENAI_API_KEY", ""))
             .function_call_tool(mcp_tool)
             .build()
         )
-        print("Assistant built successfully")
-        
+        print("Generate contract assistant built successfully")
+
         return assistant
     except Exception as e:
-        print(f"Error building MCP tool or assistant: {e}")
+        print(f"Error building generate contract assistant: {e}")
         print(f"Error type: {type(e)}")
         raise
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -79,23 +103,35 @@ async def lifespan(app: FastAPI):
     Puts the assistant on app.state for access in routes.
     """
     app.state.assistant = None
+    app.state.generate_contract_assistant = None
+
+    # Build generate contract assistant first (used by ReAct agent via AgentCallingTool)
+    generate_contract_assistant = None
     try:
-        assistant = await create_react_assistant()
-        app.state.assistant = assistant
-        print("Backend API: react assistant built successfully")
-        print("Backend API: Server ready on http://localhost:8000")
+        generate_contract_assistant = await create_generate_contract_assistant()
+        app.state.generate_contract_assistant = generate_contract_assistant
+        print("Backend API: generate contract assistant built successfully")
     except Exception as e:
-        # Keep running in fallback mode
-        print(f"Backend API: Failed to initialize assistant: {e}")
+        print(f"Backend API: Failed to initialize generate contract assistant: {e}")
+        print("Backend API: Contract generation will not be available")
+
+    # Build orchestration assistant, injecting the generate contract assistant
+    try:
+        assistant = await create_orchestration_assistant(generate_contract_assistant)
+        app.state.assistant = assistant
+        print("Backend API: orchestration assistant built successfully")
+    except Exception as e:
+        print(f"Backend API: Failed to initialize orchestration assistant: {e}")
         print("Backend API: Running in fallback mode (assistant=None)")
+
+    print("Backend API: Server ready on http://localhost:8000")
 
     # Hand control back to FastAPI
     try:
         yield
     finally:
-        # Shutdown
-        # If your assistant holds network conns, close them here.
         app.state.assistant = None
+        app.state.generate_contract_assistant = None
         print("Backend API: Lifespan shutdown complete")
 
 app = FastAPI(title="Smart Contract Assistant API", version="1.0.0", lifespan=lifespan)
