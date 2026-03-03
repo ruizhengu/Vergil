@@ -24,4 +24,5 @@ dependencies = [
     "ruff>=0.12.5",
     "sqlalchemy>=2.0.42",
     "web3>=7.12.1",
+    "z3-solver>=4.13.3.0",
 ]

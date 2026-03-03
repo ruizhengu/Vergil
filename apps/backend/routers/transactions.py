@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any
 import os
 import logging
 import uuid
@@ -9,6 +9,8 @@ from grafi.common.models.message import Message
 from grafi.common.events.topic_events.publish_to_topic_event import PublishToTopicEvent
 
 from deps.assistant import get_assistant
+from verification.guardrails import validate_financial_action_payload, FinancialActionValidationError
+from verification.smt_logic import verify_with_smt, SMTPreparationError
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -17,6 +19,7 @@ router = APIRouter(prefix="/api/transactions", tags=["transactions"])
 
 class BroadcastTransactionRequest(BaseModel):
     signed_transaction_hex: str
+    financial_action: Dict[str, Any]
 
 class BroadcastTransactionResponse(BaseModel):
     success: bool
@@ -26,6 +29,25 @@ class BroadcastTransactionResponse(BaseModel):
 @router.post("/broadcast", response_model=BroadcastTransactionResponse)
 async def broadcast_signed_transaction(request: BroadcastTransactionRequest, app_request: Request, assistant = Depends(get_assistant)):
     try:
+        try:
+            validated_action = validate_financial_action_payload(request.financial_action)
+            smt_result = verify_with_smt(
+                action=validated_action,
+                user_intent=request.financial_action.get("user_intent", ""),
+                contract_source=request.financial_action.get("contract_source", ""),
+            )
+            logger.info("Broadcast pre-validation passed", extra={"smt_state": smt_result["smt_state"]})
+        except SMTPreparationError as smt_error:
+            return BroadcastTransactionResponse(
+                success=False,
+                error=f"Validation failed. Transaction was not executed: {smt_error.payload.model_dump_json()}"
+            )
+        except FinancialActionValidationError as validation_error:
+            return BroadcastTransactionResponse(
+                success=False,
+                error=f"Validation failed. Transaction was not executed: {validation_error.payload.model_dump_json()}"
+            )
+
         if assistant is None:
             logger.error("Assistant not available - running in fallback mode")
             raise HTTPException(
