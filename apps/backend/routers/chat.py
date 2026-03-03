@@ -15,7 +15,7 @@ from grafi.common.models.invoke_context import InvokeContext
 from grafi.common.models.message import Message
 from grafi.common.events.topic_events.publish_to_topic_event import PublishToTopicEvent
 from memory.context import get_conversation_context
-from models.agent_responses import FinalAgentResponse, DeploymentApprovalRequest, FinalAgentResponse
+from models.agent_responses import FinalAgentResponse, DeploymentApprovalRequest
 
 from routers.approval import approval_requests
 
@@ -40,10 +40,15 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
         
         print(f"Backend API: Processing message: {chat_request.message[:50]}...")
 
-        if assistant:
-            print("Backend API: Using ReAct assistant with MCP tools")
-            
-            try:
+        if not assistant:
+            return ChatResponse(
+                success=False,
+                error="Assistant not initialized. Check backend logs for startup errors."
+            )
+
+        print("Backend API: Using orchestration assistant with MCP tools")
+
+        try:
                 invoke_context = InvokeContext(
                     conversation_id=conversation_id,
                     invoke_id=uuid.uuid4().hex,
@@ -51,7 +56,7 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
                 )
                 
                 # get context
-                conversation_history = get_conversation_context(conversation_id)
+                conversation_history = await get_conversation_context(conversation_id)
 
                 input_data = conversation_history + [Message(role="user", content=chat_request.message)]
 
@@ -74,7 +79,7 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
 
                 try:
                     response_count = 0
-                    async for response_event in assistant.a_invoke(input_event):
+                    async for response_event in assistant.invoke(input_event):
                         response_count += 1
                         
                         if hasattr(response_event, 'data') and response_event.data:
@@ -236,7 +241,7 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
                     }
                 )
                 
-            except Exception as react_error:
+        except Exception as react_error:
                 print(f"Backend API: ReAct assistant failed: {react_error}, falling back to default response")
                 # Return fallback response instead of continuing
                 return ChatResponse(

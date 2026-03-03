@@ -8,8 +8,8 @@ from datetime import datetime
 from grafi.common.models.invoke_context import InvokeContext
 from grafi.common.models.message import Message
 from grafi.common.events.topic_events.publish_to_topic_event import PublishToTopicEvent
-from grafi.common.topics.in_workflow_input_topic import InWorkflowInputTopic
-from grafi.common.topics.in_workflow_output_topic import InWorkflowOutputTopic
+from grafi.topics.topic_impl.in_workflow_input_topic import InWorkflowInputTopic
+from grafi.topics.topic_impl.in_workflow_output_topic import InWorkflowOutputTopic
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

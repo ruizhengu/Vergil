@@ -2,7 +2,7 @@ services:
   # Postgres
   postgres:
     image: postgres:15
-    container_name: postgres15
+    container_name: vergil_postgres15
     environment:
       - POSTGRES_DB=${POSTGRES_DB}
       - POSTGRES_USER=${POSTGRES_USER}
@@ -16,7 +16,7 @@ services:
   # Pgadmin
   pgadmin:
     image: dpage/pgadmin4:latest
-    container_name: pgadmin
+    container_name: vergil_pgadmin
     environment:
       - PGADMIN_DEFAULT_EMAIL=${pg_admin_email}
       - PGADMIN_DEFAULT_PASSWORD=${pg_admin_password}
@@ -30,9 +30,9 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.server
-    container_name: mcp_server
+    container_name: vergil_mcp_server
     ports:
-      - "8081:8081"
+      - "8082:8081"
     volumes:
       - ./services/mcp_server/src/contracts:/app/src/contracts
       - ./node_modules:/app/node_modules
@@ -77,7 +77,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.frontend
-    container_name: frontend_app
+    container_name: vergil_frontend_app
     ports:
       - "3000:3000"
     depends_on:
@@ -88,30 +88,6 @@ services:
       - NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=${NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID}
     networks:
       - graphite_network
-  
-  # # Grafi Development Server (from graphite-dev repo)
-  # grafi_dev:
-  #   build:
-  #     context: .
-  #     dockerfile: docker/Dockerfile.grafi-dev
-  #   container_name: grafi_dev_server
-  #   ports:
-  #     - "8888:8888"  # Development server port
-  #   volumes:
-  #     - ./src:/app/src  # Mount source code for hot reload
-  #     - ./apps/backend:/app/backend  # Mount backend code
-  #   environment:
-  #     - NODE_ENV=development
-  #     - OPENAI_API_KEY=${OPENAI_API_KEY}
-  #     - OPENAI_MODEL=${OPENAI_MODEL}
-  #     - POSTGRES_DB=${POSTGRES_DB}
-  #     - POSTGRES_USER=${POSTGRES_USER}
-  #     - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-  #     - POSTGRES_HOST=postgres
-  #   depends_on:
-  #     - postgres
-  #   networks:
-  #     - graphite_network
 
   # Phoenix
   phoenix:

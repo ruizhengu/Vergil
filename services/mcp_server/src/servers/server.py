@@ -38,7 +38,7 @@ solcx.set_solc_version('0.8.27')
 
 compilation_cache = {}
 
-mcp = FastMCP(name="crypto_mcp", log_level="DEBUG")
+mcp = FastMCP(name="vergil_mcp")
 mcp.add_middleware(LoggingMiddleware())
 
 @mcp.tool(
