@@ -22,7 +22,7 @@ from grafi.tools.llms.impl.openai_tool import OpenAITool
 from grafi.tools.function_calls.impl.mcp_tool import MCPTool
 from grafi.tools.function_calls.impl.agent_calling_tool import AgentCallingTool
 from grafi.workflows.impl.event_driven_workflow import EventDrivenWorkflow
-from models.agent_responses import ReasoningResponse, FinalAgentResponse
+from models.agent_responses import ReasoningResponse, FinalAgentResponse, CommonSenseVerificationResponse
 
 
 load_dotenv()
@@ -40,6 +40,7 @@ DEPLOYMENT_REQUEST_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "de
 DEPLOYMENT_APPROVAL_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "deployment_approval.md"))
 FINAL_OUTPUT_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "final_output.md"))
 CONTRACT_GENERATION_DELEGATION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "contract_generation_delegation.md"))
+COMMON_SENSE_VERIFICATION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "common_sense_verification.md"))
 
 
 class OrchestrationAssistant(Assistant):
@@ -80,8 +81,8 @@ class OrchestrationAssistant(Assistant):
         agent_input_topic = InputTopic(name="agent_input_topic")
         agent_output_topic = OutputTopic(name="agent_output_topic")
 
-        def _parse_reasoning(msg):
-            """Parse reasoning content from either JSON string or Pydantic object."""
+        def _parse_message_content(msg):
+            """Parse content from either JSON string or Pydantic object."""
             if not hasattr(msg, 'content') or not msg.content:
                 return None
             content = msg.content
@@ -98,6 +99,12 @@ class OrchestrationAssistant(Assistant):
             if hasattr(content, '__dict__'):
                 return vars(content)
             return None
+
+        def _parse_reasoning(msg):
+            return _parse_message_content(msg)
+
+        def _parse_common_sense(msg):
+            return _parse_message_content(msg)
 
         reasoning_output_topic = Topic(
             name="reasoning_output_topic",
@@ -138,6 +145,23 @@ class OrchestrationAssistant(Assistant):
         )
         broadcast_deployment_output_topic = Topic(name="broadcast_deployment_output_topic")
         deployment_request_output_topic = Topic(name="deployment_request_output_topic")
+        common_sense_verification_output_topic = Topic(name="common_sense_verification_output_topic")
+        common_sense_verification_pass_topic = Topic(
+            name="common_sense_verification_pass_topic",
+            condition=lambda event: any(
+                (parsed := _parse_common_sense(msg)) is not None and
+                parsed.get("pass_verification", False)
+                for msg in event.data
+            )
+        )
+        common_sense_verification_fail_topic = Topic(
+            name="common_sense_verification_fail_topic",
+            condition=lambda event: any(
+                (parsed := _parse_common_sense(msg)) is not None and
+                not parsed.get("pass_verification", False)
+                for msg in event.data
+            )
+        )
         deployment_approval_output_topic = Topic(name="deployment_approval_output_topic")
 
         contract_agent_result_topic = Topic(name="contract_agent_result_topic")
@@ -351,6 +375,52 @@ class OrchestrationAssistant(Assistant):
             .build()
         )
 
+        common_sense_verification_node = (
+            Node.builder()
+            .name("common_sense_verification_node")
+            .type("common_sense_verification_node")
+            .subscribe(
+                SubscriptionBuilder()
+                .subscribed_to(deployment_request_output_topic)
+                .build()
+            )
+            .tool(
+                OpenAITool.builder()
+                .name("common_sense_verification_llm")
+                .api_key(self.api_key)
+                .model(self.model)
+                .system_message(COMMON_SENSE_VERIFICATION_PROMPT)
+                .chat_params({"response_format": CommonSenseVerificationResponse})
+                .build()
+            )
+            .publish_to(common_sense_verification_output_topic)
+            .publish_to(common_sense_verification_pass_topic)
+            .publish_to(common_sense_verification_fail_topic)
+            .build()
+        )
+
+        common_sense_fail_output_node = (
+            Node.builder()
+            .name("common_sense_fail_output_node")
+            .type("common_sense_fail_output_node")
+            .subscribe(
+                SubscriptionBuilder()
+                .subscribed_to(common_sense_verification_fail_topic)
+                .build()
+            )
+            .tool(
+                OpenAITool.builder()
+                .name("common_sense_fail_output_llm")
+                .api_key(self.api_key)
+                .model(self.model)
+                .system_message(FINAL_OUTPUT_PROMPT)
+                .chat_params({"response_format": FinalAgentResponse})
+                .build()
+            )
+            .publish_to(agent_output_topic)
+            .build()
+        )
+
         deployment_approval_node = (
             Node.builder()
             .name("deployment_approval_node")
@@ -378,7 +448,7 @@ class OrchestrationAssistant(Assistant):
             .type("prepare_deployment_node")
             .subscribe(
                 SubscriptionBuilder()
-                .subscribed_to(deployment_request_output_topic)
+                .subscribed_to(common_sense_verification_pass_topic)
                 .build()
             )
             .tool(self.function_call_tool)
@@ -409,6 +479,8 @@ class OrchestrationAssistant(Assistant):
             .node(compile_tool_node)
             .node(output_node)
             .node(deployment_request_node)
+            .node(common_sense_verification_node)
+            .node(common_sense_fail_output_node)
             .node(deployment_approval_node)
             .node(prepare_deployment_node)
             .node(broadcast_deployment_node)

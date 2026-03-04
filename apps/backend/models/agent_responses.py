@@ -94,6 +94,18 @@ class FinalAgentResponse(BaseModel):
     )
 
 
+class CommonSenseVerificationResponse(BaseModel):
+    pass_verification: bool = Field(
+        description="Whether the planned deployment passes common-sense verification"
+    )
+    reason: str = Field(
+        description="Short explanation for pass or fail"
+    )
+    risk_level: Literal["low", "medium", "high"] = Field(
+        description="Risk level for the deployment plan"
+    )
+
+
 class FinancialAction(BaseModel):
     amount: float = Field(
         gt=0,
@@ -182,5 +194,6 @@ AgentResponse = Union[
     ReasoningResponse,
     DeploymentApprovalRequest,
     ApprovalResponse,
-    FinalAgentResponse
+    FinalAgentResponse,
+    CommonSenseVerificationResponse,
 ]
