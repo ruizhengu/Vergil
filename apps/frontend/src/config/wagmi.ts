@@ -7,5 +7,5 @@ export const config = getDefaultConfig({
   appName: 'Smart Contract Assistant',
   projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || 'your-project-id',
   chains: [sepolia, mainnet],
-  ssr: true,
+  ssr: false,
 });

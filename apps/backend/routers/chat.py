@@ -15,9 +15,7 @@ from grafi.common.models.invoke_context import InvokeContext
 from grafi.common.models.message import Message
 from grafi.common.events.topic_events.publish_to_topic_event import PublishToTopicEvent
 from memory.context import get_conversation_context
-from models.agent_responses import FinalAgentResponse, DeploymentApprovalRequest, FinalAgentResponse
-from verification.guardrails import validate_financial_action_payload, FinancialActionValidationError
-from verification.smt_logic import verify_with_smt, SMTPreparationError
+from models.agent_responses import FinalAgentResponse, DeploymentApprovalRequest
 
 from routers.approval import approval_requests
 
@@ -42,10 +40,15 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
         
         print(f"Backend API: Processing message: {chat_request.message[:50]}...")
 
-        if assistant:
-            print("Backend API: Using ReAct assistant with MCP tools")
-            
-            try:
+        if not assistant:
+            return ChatResponse(
+                success=False,
+                error="Assistant not initialized. Check backend logs for startup errors."
+            )
+
+        print("Backend API: Using orchestration assistant with MCP tools")
+
+        try:
                 invoke_context = InvokeContext(
                     conversation_id=conversation_id,
                     invoke_id=uuid.uuid4().hex,
@@ -53,7 +56,7 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
                 )
                 
                 # get context
-                conversation_history = get_conversation_context(conversation_id)
+                conversation_history = await get_conversation_context(conversation_id)
 
                 input_data = conversation_history + [Message(role="user", content=chat_request.message)]
 
@@ -76,7 +79,7 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
 
                 try:
                     response_count = 0
-                    async for response_event in assistant.a_invoke(input_event):
+                    async for response_event in assistant.invoke(input_event):
                         response_count += 1
                         
                         if hasattr(response_event, 'data') and response_event.data:
@@ -161,49 +164,6 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
 
                                             # Extract transaction data from MCP response (not deployment_request object)
                                             transaction_data = mcp_response.get('transaction', {})
-
-                                            value_raw = transaction_data.get("value", 0)
-                                            if isinstance(value_raw, str) and value_raw.startswith("0x"):
-                                                direct_amount = int(value_raw, 16) / 10**18
-                                            else:
-                                                direct_amount = int(value_raw) / 10**18
-
-                                            estimated_gas = mcp_response.get("estimated_gas")
-                                            gas_price_gwei = mcp_response.get("gas_price_gwei")
-                                            gas_amount = 0.0
-                                            if estimated_gas is not None and gas_price_gwei is not None:
-                                                gas_amount = (int(estimated_gas) * int(gas_price_gwei)) / 10**9
-
-                                            amount = direct_amount if direct_amount > 0 else gas_amount
-
-                                            financial_payload = {
-                                                "amount": amount,
-                                                "asset": "ETH",
-                                                "target_address": transaction_data.get("to") or mcp_response.get("user_address"),
-                                            }
-
-                                            try:
-                                                validated_action = validate_financial_action_payload(financial_payload)
-                                                structured_response["financial_action"] = validated_action.model_dump()
-                                                smt_result = verify_with_smt(
-                                                    action=validated_action,
-                                                    user_intent=chat_request.message,
-                                                    contract_source=mcp_response.get("solidity_code") or "",
-                                                )
-                                                structured_response["smt_state"] = smt_result["smt_state"]
-                                                structured_response["smt_constraints"] = smt_result["constraints"]
-                                                structured_response["contract_facts"] = smt_result["contract_facts"]
-                                            except SMTPreparationError as smt_error:
-                                                return ChatResponse(
-                                                    success=False,
-                                                    error=f"Validation failed. Transaction was not executed: {smt_error.payload.model_dump_json()}"
-                                                )
-                                            except FinancialActionValidationError as validation_error:
-                                                return ChatResponse(
-                                                    success=False,
-                                                    error=f"Validation failed. Transaction was not executed: {validation_error.payload.model_dump_json()}"
-                                                )
-
                                             transaction_data_str = str(transaction_data.get('data', ''))  # Use transaction data as key
                                             
                                             # Check if there's already a pending approval request for this transaction
@@ -224,8 +184,6 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
                                                     "approval_id": approval_id,
                                                     "transaction_data": transaction_data,
                                                     "timestamp": datetime.now(),
-                                                    "user_intent": chat_request.message,
-                                                    "contract_source": mcp_response.get("solidity_code") or "",
                                                     "contract_type": "Smart Contract",  # Generic since MCP response doesn't have contract_type
                                                     "deployment_details": {
                                                         "user_address": mcp_response.get('user_address'),
@@ -283,7 +241,7 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
                     }
                 )
                 
-            except Exception as react_error:
+        except Exception as react_error:
                 print(f"Backend API: ReAct assistant failed: {react_error}, falling back to default response")
                 # Return fallback response instead of continuing
                 return ChatResponse(

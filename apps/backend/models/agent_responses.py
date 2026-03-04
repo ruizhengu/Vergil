@@ -5,25 +5,29 @@ from pydantic import BaseModel, Field, ValidationError as PydanticValidationErro
 
 class ReasoningResponse(BaseModel):
     reasoning: str = Field(description="The agent's reasoning process and observations")
-    requires_tool_call: bool = Field(
-        default=False,
-        description="Whether this reasoning requires tool execution"
-    )
-    tool_call_reasoning: Optional[str] = Field(
-        default=None,
-        description="Specific reasoning for what tool to call and why"
-    )
-    tool_result: Optional[Dict[str, str]] = Field(
-        default=None,
-        description="Result from tool execution, if any"
-    )
     confidence: float = Field(
         ge=0.0, le=1.0,
         description="Confidence level in the reasoning (0-1)"
     )
+    requires_compile: bool = Field(
+        default=False,
+        description="Whether this request requires compiling a Solidity contract"
+    )
     requires_deployment: bool = Field(
         default=False,
         description="Whether this reasoning requires deploying a compiled smart contract"
+    )
+    requires_contract_generation: bool = Field(
+        default=False,
+        description="Whether this request should be routed to the contract generation agent"
+    )
+    solidity_code: Optional[str] = Field(
+        default=None,
+        description="Solidity source code from contract generation or context, pass through as-is"
+    )
+    compilation_id: Optional[str] = Field(
+        default=None,
+        description="Compilation ID from a successful compile_contract call"
     )
 
 class DeploymentApprovalRequest(BaseModel):
