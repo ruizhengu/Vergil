@@ -18,8 +18,11 @@ setup_paths()
 
 def run_test(test_name):
     """Run a specific test file"""
-    backend_dir = Path(__file__).parent.parent
-    test_file = backend_dir / f"test_{test_name}.py" if test_name in ["verification_local", "verification_advanced"] else backend_dir / f"{test_name}.py"
+    tests_dir = Path(__file__).parent
+    if test_name in ["verification_local", "verification_advanced"]:
+        test_file = tests_dir / f"test_{test_name}.py"
+    else:
+        test_file = tests_dir / f"{test_name}.py"
     
     if not test_file.exists():
         print(f"❌ Test file not found: {test_file}")
@@ -45,14 +48,14 @@ def main():
         test_arg = sys.argv[1].lower()
         if test_arg == "all":
             tests = ["verification_local", "verification_advanced"]
-        elif test_arg in ["local", "advanced", "diagnose", "address_fix", "check_address_length"]:
+        elif test_arg in ["local", "advanced", "quick_api", "rate_limit_compliant"]:
             if test_arg in ["local", "advanced"]:
                 tests = [f"verification_{test_arg}"]
             else:
                 tests = [test_arg]
         else:
             print(f"Unknown test: {test_arg}")
-            print("Available tests: local, advanced, diagnose, address_fix, check_address_length, all")
+            print("Available tests: local, advanced, quick_api, rate_limit_compliant, all")
             return 1
     
     results = {}

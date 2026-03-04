@@ -2,11 +2,16 @@ import json
 import os
 import re
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 
+from dotenv import load_dotenv
 import requests
 from z3 import And, Bool, BoolVal, Or, Real, RealVal, Solver, String, StringVal, sat
 
 from models.agent_responses import FinancialAction, StructuredValidationError, build_validation_error, SMTState
+
+env_path = Path(__file__).parent.parent.parent.parent / ".env"
+load_dotenv(env_path)
 
 
 PREDEFINED_REQUIREMENTS: List[str] = [
@@ -62,6 +67,7 @@ def _default_constraint_bundle(action: FinancialAction, contract_facts: Dict[str
             "user_intent": "parsed-fallback",
             "predefined_requirements": PREDEFINED_REQUIREMENTS,
         },
+        "tokens_used": 0,
     }
 
 
@@ -73,8 +79,13 @@ def _extract_constraints_with_llm(
 ) -> Dict[str, Any]:
     api_key = os.getenv("OPENAI_API_KEY")
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    
     if not api_key:
-        return _default_constraint_bundle(action, contract_facts)
+        result = _default_constraint_bundle(action, contract_facts)
+        result["llm_used"] = False
+        result["model"] = None
+        result["llm_reason"] = "No OPENAI_API_KEY found"
+        return result
 
     prompt = {
         "user_intent": user_intent,
@@ -111,19 +122,56 @@ def _extract_constraints_with_llm(
             },
             timeout=20,
         )
+
         response.raise_for_status()
         payload = response.json()
         content = payload["choices"][0]["message"]["content"]
+
+        tokens_used = 0
+        if "usage" in payload:
+            tokens_used = payload["usage"].get("total_tokens", 0)
+
         parsed = json.loads(content)
+
         if "pre_condition" not in parsed or "post_condition" not in parsed:
-            return _default_constraint_bundle(action, contract_facts)
+            result = _default_constraint_bundle(action, contract_facts)
+            result["llm_used"] = False
+            result["model"] = model
+            result["llm_reason"] = "LLM response missing required fields"
+            result["tokens_used"] = tokens_used
+            return result
+
+        parsed["llm_used"] = True
+        parsed["model"] = model
+        parsed["llm_response"] = content
+        parsed["tokens_used"] = tokens_used
         parsed["sources"] = {
             "user_intent": user_intent,
             "predefined_requirements": predefined_requirements,
         }
         return parsed
-    except Exception:
-        return _default_constraint_bundle(action, contract_facts)
+
+    except requests.exceptions.Timeout:
+        result = _default_constraint_bundle(action, contract_facts)
+        result["llm_used"] = False
+        result["model"] = model
+        result["llm_reason"] = "API timeout"
+        result["tokens_used"] = 0
+        return result
+    except requests.exceptions.HTTPError as e:
+        result = _default_constraint_bundle(action, contract_facts)
+        result["llm_used"] = False
+        result["model"] = model
+        result["llm_reason"] = f"HTTP Error {e.response.status_code}: {e.response.text[:100]}"
+        result["tokens_used"] = 0
+        return result
+    except Exception as e:
+        result = _default_constraint_bundle(action, contract_facts)
+        result["llm_used"] = False
+        result["model"] = model
+        result["llm_reason"] = f"Error: {str(e)}"
+        result["tokens_used"] = 0
+        return result
 
 
 def _constraint_to_z3_expr(
@@ -256,8 +304,14 @@ def verify_with_smt(
         raise SMTPreparationError(payload)
 
     return {
+        "valid": True,
         "smt_state": smt_state.model_dump(),
         "contract_facts": contract_facts,
         "constraints": constraint_bundle,
         "solver_result": str(result),
+        "llm_used": constraint_bundle.get("llm_used", False),
+        "model": constraint_bundle.get("model"),
+        "llm_reason": constraint_bundle.get("llm_reason"),
+        "llm_response": constraint_bundle.get("llm_response"),
+        "tokens_used": constraint_bundle.get("tokens_used", 0),
     }
