@@ -60,7 +60,8 @@ async def create_orchestration_assistant(generate_contract_assistant=None):
     except Exception as e:
         print(f"Error building orchestration assistant: {e}")
         print(f"Error type: {type(e)}")
-        raise
+        print("Running in fallback mode - MCP tools will not be available")
+        return None
 
 async def create_generate_contract_assistant():
     """Create the Generate Contract Assistant with MCP tools"""
@@ -93,7 +94,8 @@ async def create_generate_contract_assistant():
     except Exception as e:
         print(f"Error building generate contract assistant: {e}")
         print(f"Error type: {type(e)}")
-        raise
+        print("Running in fallback mode - contract generation will not be available")
+        return None
 
 
 @asynccontextmanager
@@ -190,4 +192,7 @@ async def health_check():
 
 if __name__ == "__main__":
     print("Starting Backend API Server...")
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    port = int(os.getenv("PORT", 8000))
+    print(f"PORT env var: {os.getenv('PORT')}")
+    print(f"Using port: {port}")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
