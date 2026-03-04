@@ -20,12 +20,16 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 load_dotenv()
 
-tracer = setup_tracing(
+try:
+    tracer = setup_tracing(
                 tracing_options=TracingOptions.PHOENIX,
-                collector_endpoint="phoenix",
+                collector_endpoint="http://phoenix",
                 collector_port=4317,
                 project_name="grafi-trace",
             )
+except Exception as e:
+    print(f"Warning: Could not setup tracing: {e}")
+    tracer = None
 
 async def create_orchestration_assistant(generate_contract_assistant=None):
     """Create the Orchestration Assistant with MCP tools"""
@@ -47,7 +51,7 @@ async def create_orchestration_assistant(generate_contract_assistant=None):
         print("Building orchestration assistant...")
         builder = (OrchestrationAssistant.builder()
             .name("OrchestrationAgent")
-            .model(os.getenv('OPENAI_MODEL', 'gpt-4o'))
+            .model(os.getenv('ZAI_MODEL', 'gpt-4o'))
             .api_key(os.getenv("OPENAI_API_KEY", ""))
             .function_call_tool(mcp_tool)
         )
@@ -83,7 +87,7 @@ async def create_generate_contract_assistant():
         print("Building generate contract assistant...")
         assistant = (GenerateContractAssistant.builder()
             .name("GenerateContractAgent")
-            .model(os.getenv('OPENAI_MODEL', 'gpt-4o'))
+            .model(os.getenv('ZAI_MODEL', 'gpt-4o'))
             .api_key(os.getenv("OPENAI_API_KEY", ""))
             .function_call_tool(mcp_tool)
             .build()
