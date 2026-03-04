@@ -4,12 +4,15 @@ from typing import Optional, List, Dict, Any
 import uuid
 import logging
 from datetime import datetime
+import json
 
 from grafi.common.models.invoke_context import InvokeContext
 from grafi.common.models.message import Message
 from grafi.common.events.topic_events.publish_to_topic_event import PublishToTopicEvent
 from grafi.topics.topic_impl.in_workflow_input_topic import InWorkflowInputTopic
 from grafi.topics.topic_impl.in_workflow_output_topic import InWorkflowOutputTopic
+from verification.guardrails import validate_financial_action_payload, FinancialActionValidationError
+from verification.smt_logic import verify_with_smt, SMTPreparationError
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -42,6 +45,38 @@ class ApprovalSubmitResponse(BaseModel):
     success: bool
     message: str
     error: Optional[str] = None
+
+
+def _coerce_wei_to_eth(value: Any) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, str):
+        if value.startswith("0x"):
+            wei = int(value, 16)
+        else:
+            wei = int(value)
+    else:
+        wei = int(value)
+    return wei / 10**18
+
+
+def _build_financial_payload(request_data: Dict[str, Any]) -> Dict[str, Any]:
+    tx = request_data.get("transaction_data", {})
+    deployment_details = request_data.get("deployment_details", {})
+    target_address = tx.get("to") or deployment_details.get("user_address")
+    direct_amount = _coerce_wei_to_eth(tx.get("value"))
+    estimated_gas = deployment_details.get("estimated_gas") or tx.get("gas")
+    gas_price_gwei = deployment_details.get("gas_price_gwei")
+    gas_amount = 0.0
+    if estimated_gas is not None and gas_price_gwei is not None:
+        gas_amount = (int(estimated_gas) * int(gas_price_gwei)) / 10**9
+
+    amount = direct_amount if direct_amount > 0 else gas_amount
+    return {
+        "amount": amount,
+        "asset": "ETH",
+        "target_address": target_address,
+    }
 
 @router.get("/poll", response_model=PollResponse)
 async def poll_approval_requests(request: Request):
@@ -97,6 +132,36 @@ async def submit_approval_response(approval_response: ApprovalResponse, request:
                 status_code=503, 
                 detail="Smart contract assistant not available"
             )
+
+        if approval_response.approved:
+            request_data = approval_requests.get(approval_response.approval_id)
+            if request_data is None:
+                raise HTTPException(status_code=404, detail="Approval request not found")
+
+            try:
+                financial_payload = _build_financial_payload(request_data)
+                action = validate_financial_action_payload(financial_payload)
+                smt_result = verify_with_smt(
+                    action=action,
+                    user_intent=request_data.get("user_intent", ""),
+                    contract_source=request_data.get("contract_source", ""),
+                )
+                logger.info(
+                    "Approval validation passed",
+                    extra={"approval_id": approval_response.approval_id, "smt_state": smt_result["smt_state"]},
+                )
+            except (FinancialActionValidationError, SMTPreparationError) as validation_error:
+                payload = getattr(validation_error, "payload", None)
+                error_payload = {
+                    "approval_id": approval_response.approval_id,
+                    "validation_error": payload.model_dump() if payload is not None else str(validation_error),
+                }
+                logger.error("Approval validation failed", extra=error_payload)
+                return ApprovalSubmitResponse(
+                    success=False,
+                    message="Validation failed. Transaction was not executed.",
+                    error=json.dumps(error_payload, ensure_ascii=False),
+                )
 
         # Create invoke context for the approval response
         invoke_context = InvokeContext(
