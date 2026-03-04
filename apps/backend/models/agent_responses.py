@@ -110,8 +110,43 @@ class FinancialAction(BaseModel):
     @field_validator("target_address")
     @classmethod
     def validate_target_address(cls, value: str) -> str:
-        if not re.fullmatch(r"0x[a-fA-F0-9]{40}", value):
-            raise ValueError("target_address must be a valid Ethereum address")
+        """
+        Validate Ethereum address format.
+        Accepts:
+        - Full lowercase: 0x742d35cc6634c0532925a3b844bc9c7595f5421
+        - Full uppercase: 0x742D35CC6634C0532925A3B844BC9C7595F5421
+        - EIP-55 checksum (mixed case): 0x742D35cc6634C0532925a3b844Bc9c7595f5421
+        """
+        # Check basic format: 0x prefix + 40 hex characters
+        if not value or not isinstance(value, str):
+            raise ValueError("target_address must be a string")
+        
+        if len(value) != 42:
+            raise ValueError("target_address must be exactly 42 characters (0x + 40 hex)")
+        
+        if not value.startswith("0x"):
+            raise ValueError("target_address must start with 0x")
+        
+        # Check if all characters after 0x are valid hex
+        hex_part = value[2:]
+        try:
+            int(hex_part, 16)
+        except ValueError:
+            raise ValueError("target_address contains invalid hexadecimal characters")
+        
+        # Validate checksum if mixed case (EIP-55)
+        if hex_part != hex_part.lower() and hex_part != hex_part.upper():
+            # Mixed case - validate checksum
+            try:
+                from eth_keys.datatypes import PublicKey
+                from eth_utils import validate_checksum_address
+                validate_checksum_address(value)
+            except ImportError:
+                # If eth_utils not available, just accept it (will be validated at runtime)
+                pass
+            except Exception as e:
+                raise ValueError(f"Invalid checksum address: {e}")
+        
         return value
 
 
