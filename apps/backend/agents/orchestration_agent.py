@@ -169,6 +169,29 @@ class OrchestrationAssistant(Assistant):
 
         contract_agent_result_topic = Topic(name="contract_agent_result_topic")
 
+        # Split contract agent result into verification required (has code) vs skip (needs input)
+        def _has_contract_code(msg):
+            if not hasattr(msg, 'content') or not msg.content:
+                return False
+            content = msg.content
+            if isinstance(content, str):
+                try:
+                    parsed = json.loads(content)
+                    return parsed.get("status") != "needs_input"
+                except:
+                    return False
+            return False
+
+        verification_required_topic = Topic(
+            name="verification_required_topic",
+            condition=lambda event: any(_has_contract_code(msg) for msg in event.data)
+        )
+
+        verification_skip_topic = Topic(
+            name="verification_skip_topic",
+            condition=lambda event: not any(_has_contract_code(msg) for msg in event.data)
+        )
+
         # --- Verification Topics ---
         def _parse_verification(msg):
             """Parse verification result from message content."""
@@ -260,6 +283,8 @@ class OrchestrationAssistant(Assistant):
                 .subscribed_to(broadcast_deployment_output_topic)
                 .or_()
                 .subscribed_to(verification_pass_topic)
+                .or_()
+                .subscribed_to(verification_skip_topic)
                 .build()
             )
             .tool(
@@ -374,7 +399,8 @@ class OrchestrationAssistant(Assistant):
                     .build()
                 )
                 .tool(agent_calling_tool)
-                .publish_to(contract_agent_result_topic)
+                .publish_to(verification_required_topic)
+                .publish_to(verification_skip_topic)
                 .build()
             )
 
@@ -402,7 +428,7 @@ class OrchestrationAssistant(Assistant):
             .type("verification_action_node")
             .subscribe(
                 SubscriptionBuilder()
-                .subscribed_to(contract_agent_result_topic)
+                .subscribed_to(verification_required_topic)
                 .build()
             )
             .tool(verification_zai_tool)
