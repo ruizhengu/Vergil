@@ -2,7 +2,7 @@ import os
 import json
 
 from pathlib import Path
-from typing import Optional, Any
+from typing import Dict, Optional, Any
 from dotenv import load_dotenv
 from pydantic import Field
 
@@ -38,6 +38,10 @@ DEPLOYMENT_APPROVAL_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "d
 FINAL_OUTPUT_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "final_output.md"))
 CONTRACT_GENERATION_DELEGATION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "contract_generation_delegation.md"))
 DEPLOYMENT_DELEGATION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "deployment_delegation.md"))
+CONTRACT_VERIFICATION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "contract_verification.md"))
+
+# Track verification retries per invoke_id (max 2 retries before proceeding with warnings)
+_verification_retries: Dict[str, int] = {}
 
 
 class OrchestrationAssistant(Assistant):
@@ -121,6 +125,75 @@ class OrchestrationAssistant(Assistant):
 
         contract_agent_result_topic = Topic(name="contract_agent_result_topic")
 
+        # --- Verification Topics ---
+        def _parse_verification(msg):
+            """Parse verification result from message content."""
+            if not hasattr(msg, 'content') or not msg.content:
+                return None
+            content = msg.content
+            if isinstance(content, str):
+                try:
+                    return json.loads(content)
+                except (json.JSONDecodeError, ValueError):
+                    return None
+            if isinstance(content, dict):
+                return content
+            if hasattr(content, 'model_dump'):
+                return content.model_dump()
+            if hasattr(content, '__dict__'):
+                return vars(content)
+            return None
+
+        def _get_retry_count(event) -> int:
+            """Get current retry count from event context."""
+            invoke_id = "default"
+            if hasattr(event, 'invoke_context') and hasattr(event.invoke_context, 'invoke_id'):
+                invoke_id = event.invoke_context.invoke_id
+            return _verification_retries.get(invoke_id, 0)
+
+        def _check_verification_pass(event) -> bool:
+            """Check if verification passed or max retries reached."""
+            passed = any(
+                (parsed := _parse_verification(msg)) is not None and
+                parsed.get('pass_verification', False)
+                for msg in event.data
+            )
+            if passed:
+                return True
+            # If failed but max retries reached, pass anyway (with warnings in the data)
+            if _get_retry_count(event) >= 2:
+                return True
+            return False
+
+        def _check_verification_fail(event) -> bool:
+            """Check if verification failed and retries remain. Increments retry counter."""
+            failed = any(
+                (parsed := _parse_verification(msg)) is not None and
+                not parsed.get('pass_verification', True)
+                for msg in event.data
+            )
+            if not failed:
+                return False
+            retries = _get_retry_count(event)
+            if retries >= 2:
+                return False  # Max retries reached, will route to pass topic instead
+            # Increment retry counter
+            invoke_id = "default"
+            if hasattr(event, 'invoke_context') and hasattr(event.invoke_context, 'invoke_id'):
+                invoke_id = event.invoke_context.invoke_id
+            _verification_retries[invoke_id] = retries + 1
+            return True
+
+        verification_pass_topic = Topic(
+            name="verification_pass_topic",
+            condition=_check_verification_pass
+        )
+
+        verification_fail_topic = Topic(
+            name="verification_fail_topic",
+            condition=_check_verification_fail
+        )
+
         deployment_topic = Topic(
             name="deployment_topic",
             condition=lambda event: any(
@@ -142,7 +215,7 @@ class OrchestrationAssistant(Assistant):
                 .or_()
                 .subscribed_to(broadcast_deployment_output_topic)
                 .or_()
-                .subscribed_to(contract_agent_result_topic)
+                .subscribed_to(verification_pass_topic)
                 .build()
             )
             .tool(
@@ -232,6 +305,8 @@ class OrchestrationAssistant(Assistant):
                 .subscribe(
                     SubscriptionBuilder()
                     .subscribed_to(contract_generation_topic)
+                    .or_()
+                    .subscribed_to(verification_fail_topic)
                     .build()
                 )
                 .tool(contract_delegation_openai_tool)
@@ -252,6 +327,53 @@ class OrchestrationAssistant(Assistant):
                 .publish_to(contract_agent_result_topic)
                 .build()
             )
+
+        # Verification nodes — LLM + MCP tool pattern (action → tool)
+        verification_action_output_topic = Topic(name="verification_action_output_topic")
+
+        verification_openai_tool = (
+            OpenAITool.builder()
+            .name("verification_llm")
+            .api_key(self.api_key)
+            .model(self.model)
+            .system_message(CONTRACT_VERIFICATION_PROMPT)
+            .build()
+        )
+        # Add verify_contract_code function spec from MCP tool
+        verification_specs = [
+            spec for spec in self.function_call_tool.function_specs
+            if spec.name == "verify_contract_code"
+        ]
+        verification_openai_tool.add_function_specs(verification_specs)
+
+        verification_action_node = (
+            Node.builder()
+            .name("verification_action_node")
+            .type("verification_action_node")
+            .subscribe(
+                SubscriptionBuilder()
+                .subscribed_to(contract_agent_result_topic)
+                .build()
+            )
+            .tool(verification_openai_tool)
+            .publish_to(verification_action_output_topic)
+            .build()
+        )
+
+        verification_tool_node = (
+            Node.builder()
+            .name("verification_tool_node")
+            .type("verification_tool_node")
+            .subscribe(
+                SubscriptionBuilder()
+                .subscribed_to(verification_action_output_topic)
+                .build()
+            )
+            .tool(self.function_call_tool)
+            .publish_to(verification_pass_topic)
+            .publish_to(verification_fail_topic)
+            .build()
+        )
 
         # Output node
         output_node = (
@@ -405,6 +527,8 @@ class OrchestrationAssistant(Assistant):
                 workflow_builder
                 .node(contract_delegation_node)
                 .node(contract_agent_execution_node)
+                .node(verification_action_node)
+                .node(verification_tool_node)
             )
 
         if self.deployment_assistant is not None:

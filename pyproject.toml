@@ -26,4 +26,5 @@ dependencies = [
     "asyncpg>=0.30.0",
     "sqlalchemy>=2.0.42",
     "web3>=7.12.1",
+    "z3-solver>=4.12.0",
 ]

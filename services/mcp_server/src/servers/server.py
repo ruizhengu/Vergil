@@ -364,6 +364,127 @@ async def broadcast_signed_transaction(
             "message": f"Transaction broadcast failed: {str(e)}"
         }
 
+@mcp.tool(
+    name="verify_contract_code",
+    description="Verify generated Solidity contract code for security and correctness using programmatic checks"
+)
+async def verify_contract_code(
+    solidity_code: Annotated[str, Field(
+        description="Solidity source code to verify",
+        min_length=1
+    )]
+) -> dict:
+    """
+    Runs programmatic security and correctness checks on Solidity code.
+    No LLM involved — pure regex/static analysis.
+    """
+    import re as _re
+
+    issues = []
+    source = solidity_code
+
+    # 1. Pragma version check
+    pragma_match = _re.search(r"pragma\s+solidity\s+[\^~>=]*\s*(0\.8)", source)
+    if not pragma_match:
+        issues.append("Missing or invalid pragma: expected pragma solidity ^0.8.x")
+
+    # 2. Import validation — check @openzeppelin imports exist and paths look valid
+    oz_imports = _re.findall(r'import\s+[^;]*["\'](@openzeppelin/contracts/[^"\']+)["\']', source)
+    valid_oz_paths = [
+        "token/ERC20", "token/ERC721", "access/Ownable", "access/AccessControl",
+        "security/ReentrancyGuard", "security/Pausable", "utils/", "interfaces/",
+        "token/ERC20/extensions/", "token/ERC721/extensions/",
+        "governance/", "proxy/", "metatx/",
+    ]
+    for imp in oz_imports:
+        path = imp.replace("@openzeppelin/contracts/", "")
+        if not any(path.startswith(vp) for vp in valid_oz_paths):
+            issues.append(f"Suspicious OpenZeppelin import path: {imp}")
+
+    # 3. Access control check
+    has_ownable = bool(_re.search(r"\bOwnable\b", source))
+    has_access_control = bool(_re.search(r"\bAccessControl\b", source))
+    has_only_owner = bool(_re.search(r"\bonlyOwner\b", source))
+    has_access_modifier = has_ownable or has_access_control or has_only_owner
+
+    # Check for sensitive functions without access control
+    sensitive_fns = _re.findall(
+        r"function\s+(mint|pause|unpause|burn|setBaseURI|withdraw|transferOwnership)\s*\([^)]*\)[^{]*\{",
+        source
+    )
+    if sensitive_fns and not has_access_modifier:
+        issues.append(
+            f"Sensitive functions found ({', '.join(sensitive_fns)}) but no access control "
+            f"(Ownable/AccessControl/onlyOwner) detected"
+        )
+
+    # 4. Require checks
+    has_require = "require(" in source
+    has_custom_errors = bool(_re.search(r"\berror\s+\w+\s*\(", source))
+    has_revert = bool(_re.search(r"\brevert\s+\w+\s*\(", source))
+    if not (has_require or has_custom_errors or has_revert):
+        issues.append("No require() checks or custom errors found — input validation may be missing")
+
+    # 5. Reentrancy check
+    has_external_call = bool(_re.search(r"\.call\s*\{", source))
+    has_reentrancy_guard = bool(_re.search(r"\bReentrancyGuard\b", source))
+    has_nonreentrant = bool(_re.search(r"\bnonReentrant\b", source))
+    if has_external_call and not (has_reentrancy_guard or has_nonreentrant):
+        issues.append(
+            "External .call{} detected without ReentrancyGuard — potential reentrancy vulnerability"
+        )
+
+    # 6. Event emissions
+    has_emit = bool(_re.search(r"\bemit\s+\w+", source))
+    if not has_emit:
+        issues.append("No event emissions found — state changes should emit events")
+
+    # 7. Constructor check
+    has_constructor = bool(_re.search(r"\bconstructor\s*\(", source))
+    if not has_constructor:
+        issues.append("No constructor found — contract may not initialize properly")
+
+    # 8. Extract function names (contract facts)
+    function_names = _re.findall(r"function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", source)
+    has_transfer_fn = "transfer" in function_names
+
+    # Determine risk level and pass/fail
+    critical_keywords = [
+        "reentrancy", "access control", "pragma", "constructor",
+    ]
+    critical_issues = [i for i in issues if any(k in i.lower() for k in critical_keywords)]
+
+    if not issues:
+        risk_level = "low"
+        pass_verification = True
+        summary = "All programmatic checks passed. Contract follows expected patterns."
+    elif not critical_issues:
+        risk_level = "medium"
+        pass_verification = True
+        summary = f"Minor issues found ({len(issues)}), but no critical problems."
+    else:
+        risk_level = "high"
+        pass_verification = False
+        summary = f"Critical issues found ({len(critical_issues)} critical, {len(issues)} total). Contract should be regenerated."
+
+    return {
+        "pass_verification": pass_verification,
+        "risk_level": risk_level,
+        "issues": issues,
+        "contract_facts": {
+            "functions": function_names,
+            "has_transfer_function": has_transfer_fn,
+            "has_access_control": has_access_modifier,
+            "has_require_checks": has_require,
+            "has_reentrancy_guard": has_reentrancy_guard or has_nonreentrant,
+            "has_events": has_emit,
+            "has_constructor": has_constructor,
+            "openzeppelin_imports": oz_imports,
+        },
+        "summary": summary,
+    }
+
+
 @mcp.custom_route("/api/transaction/{compilation_id}", methods=["GET"])
 async def get_cached_transaction(request):
     """Return the full prepared transaction (with bytecode) for a compilation ID."""
