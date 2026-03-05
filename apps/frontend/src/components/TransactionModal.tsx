@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { X, AlertTriangle } from 'lucide-react';
 import { useAccount, useWalletClient } from 'wagmi';
 import { serializeTransaction } from 'viem';
+import { sepolia } from 'viem/chains';
 
 interface TransactionData {
   from?: string;
@@ -77,9 +78,15 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
         console.log('Transaction data received:', currentTransactionData);
         
         // Prepare transaction for sending (browser wallets use sendTransaction, not signTransaction)
+        // For contract deployments, 'to' must be undefined (not empty string or "0x")
+        const toAddress = currentTransactionData.to && currentTransactionData.to !== '0x' && currentTransactionData.to.length === 42
+          ? currentTransactionData.to as `0x${string}`
+          : undefined;
+
         const txToSend = {
           account: address as `0x${string}`,
-          to: currentTransactionData.to as `0x${string}` | undefined,
+          chain: sepolia,
+          to: toAddress,
           data: currentTransactionData.data as `0x${string}`,
           gas: BigInt(currentTransactionData.gas || currentTransactionData.estimated_gas || 2000000),
           gasPrice: BigInt(currentTransactionData.gasPrice || (currentTransactionData.gas_price_gwei ? Math.floor(currentTransactionData.gas_price_gwei * 1e9) : 10e9)),
@@ -130,11 +137,11 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
               const txHash = await walletClient.sendTransaction(txToSend);
               console.log('Transaction sent directly, hash:', txHash);
 
-              // Submit approval with transaction hash (backend should handle this differently)
+              // Submit approval with tx hash prefixed so backend knows it's already broadcast
               const approvalSuccess = await onApprovalSubmit(
-                approvalRequest!.approval_id, 
-                true, 
-                txHash // Note: This is a tx hash, not signed hex
+                approvalRequest!.approval_id,
+                true,
+                `ALREADY_BROADCAST:${txHash}`
               );
 
               if (approvalSuccess) {

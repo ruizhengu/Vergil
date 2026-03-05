@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 class IntentClassificationResponse(BaseModel):
     """Structured response from the intent classification node."""
 
-    intent: Literal["generic_erc20", "generic_erc721", "custom", "conversational"] = Field(
+    intent: Literal["generic_erc20", "generic_erc721", "generic_erc1155", "custom", "conversational"] = Field(
         description="Classified intent of the user's request"
     )
     reasoning: str = Field(

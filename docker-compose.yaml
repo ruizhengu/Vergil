@@ -7,11 +7,14 @@ services:
       - POSTGRES_DB=${POSTGRES_DB}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_HOST_AUTH_METHOD=md5
     volumes:
       - ./.pgdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     command: [ "postgres", "-c", "listen_addresses=*"]
+    networks:
+      - graphite_network
   
   # Pgadmin
   pgadmin:
@@ -24,7 +27,9 @@ services:
       - "5050:80"
     depends_on:
       - postgres
-    
+    networks:
+      - graphite_network
+
   # MCP Server 
   mcp_server:
     build:
@@ -35,15 +40,23 @@ services:
       - "8082:8081"
     volumes:
       - ./services/mcp_server/src/contracts:/app/src/contracts
-      - ./node_modules:/app/node_modules
     environment:
-      - METAMASK_PRIVATE_KEY=${METAMASK_PRIVATE_KEY}
       - ETHEREUM_SEPOLIA_RPC=${ETHEREUM_SEPOLIA_RPC}
-      - wallet_address=${wallet_address}
     networks:
       - graphite_network
-  
-  # Backend 
+
+  # OpenZeppelin MCP Server (via mcp-proxy)
+  oz_mcp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.oz-mcp
+    container_name: vergil_oz_mcp
+    ports:
+      - "8083:8082"
+    networks:
+      - graphite_network
+
+  # Backend
   backend:
     build:
       context: .
@@ -54,11 +67,13 @@ services:
     depends_on:
       - postgres
       - mcp_server
+      - oz_mcp
       - phoenix
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL}
       - MCP_SERVER_URL=${MCP_SERVER_URL}
+      - OZ_MCP_SERVER_URL=${OZ_MCP_SERVER_URL:-http://oz_mcp:8082/mcp/}
       - POSTGRES_DB=${POSTGRES_DB}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -66,8 +81,6 @@ services:
       - PHOENIX_ENDPOINT=${PHOENIX_ENDPOINT}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - ETHEREUM_SEPOLIA_RPC=${ETHEREUM_SEPOLIA_RPC}
-      - METAMASK_PRIVATE_KEY=${METAMASK_PRIVATE_KEY}
-      - wallet_address=${wallet_address}
     networks:
       - graphite_network
     command: sh -c "sleep 10 && uv run uvicorn main:app --host 0.0.0.0 --port 8000"

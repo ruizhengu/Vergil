@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
 
 RUN pip install uv
 
+ENV PYTHONUNBUFFERED=1
 ENV UV_SYSTEM_PYTHON=1
 ENV UV_NO_CACHE=1
 ENV UV_NO_PIP=1

@@ -3,11 +3,13 @@ import sys
 import os
 
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from deps.assistant import get_assistant
+from db.session import SessionLocal
+from db import repository as db_repo
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     
@@ -188,3 +190,92 @@ contract MyNFT is ERC721 {
             "symbol": "NFT symbol"
         }
     }
+
+
+# --- Contract History Endpoints ---
+
+@router.get("/history/{conversation_id}")
+async def get_contracts_by_conversation(conversation_id: str):
+    """List all contracts for a conversation."""
+    try:
+        db = SessionLocal()
+        try:
+            contracts = db_repo.get_contracts_by_conversation(db, conversation_id)
+            return {
+                "success": True,
+                "contracts": [
+                    {
+                        "id": c.id,
+                        "contract_name": c.contract_name,
+                        "contract_type": c.contract_type,
+                        "solidity_code": c.solidity_code,
+                        "parameters": c.parameters,
+                        "created_at": c.created_at.isoformat() if c.created_at else None,
+                    }
+                    for c in contracts
+                ],
+            }
+        finally:
+            db.close()
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/{contract_id}/compilations")
+async def get_compilations_for_contract(contract_id: str):
+    """List compilations for a specific contract."""
+    try:
+        db = SessionLocal()
+        try:
+            compilations = db_repo.get_compilations_by_contract(db, contract_id)
+            return {
+                "success": True,
+                "compilations": [
+                    {
+                        "id": comp.id,
+                        "compilation_id": comp.compilation_id,
+                        "success": comp.success,
+                        "abi": comp.abi,
+                        "bytecode": comp.bytecode[:100] + "..." if comp.bytecode and len(comp.bytecode) > 100 else comp.bytecode,
+                        "errors": comp.errors,
+                        "created_at": comp.created_at.isoformat() if comp.created_at else None,
+                    }
+                    for comp in compilations
+                ],
+            }
+        finally:
+            db.close()
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/{contract_id}/deployments")
+async def get_deployments_for_contract(contract_id: str):
+    """List deployments for a specific contract (via its compilations)."""
+    try:
+        db = SessionLocal()
+        try:
+            compilations = db_repo.get_compilations_by_contract(db, contract_id)
+            all_deployments = []
+            for comp in compilations:
+                deployments = db_repo.get_deployments_by_compilation(db, comp.id)
+                for dep in deployments:
+                    all_deployments.append({
+                        "id": dep.id,
+                        "compilation_id_ref": dep.compilation_id_ref,
+                        "transaction_hash": dep.transaction_hash,
+                        "contract_address": dep.contract_address,
+                        "chain_id": dep.chain_id,
+                        "deployer_address": dep.deployer_address,
+                        "status": dep.status,
+                        "gas_used": dep.gas_used,
+                        "created_at": dep.created_at.isoformat() if dep.created_at else None,
+                    })
+            return {
+                "success": True,
+                "deployments": all_deployments,
+            }
+        finally:
+            db.close()
+    except Exception as e:
+        return {"success": False, "error": str(e)}

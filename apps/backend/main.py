@@ -6,13 +6,43 @@ from dotenv import load_dotenv
 from typing import Dict
 from grafi.common.models.mcp_connections import StreamableHttpConnection
 from grafi.tools.function_calls.impl.mcp_tool import MCPTool
+from utils.safe_mcp_tool import SafeMCPTool
 from agents.orchestration_agent import OrchestrationAssistant
 from agents.generate_contract_agent import GenerateContractAssistant
+from agents.deployment_agent import DeploymentAssistant
 from contextlib import asynccontextmanager
+import logging
 import uvicorn
 import sys
 
-from routers import chat, tools, contracts, transactions, approval, wallet
+# Register PostgreSQL event store (must happen before any assistant is created)
+import event_store.postgres  # noqa: F401
+
+# Suppress noisy grafi polling logs, but show topic condition failures
+import loguru
+loguru.logger.remove()
+
+def _log_filter(record):
+    msg = record["message"]
+    if "waiting for new messages" in msg:
+        return False
+    if "No new messages" in msg:
+        return False
+    if "_is_quiescent_unlocked" in msg:
+        return False
+    if "Tracker:" in msg and "is_quiescent" in msg:
+        return False
+    if "invoke_parallel: tracker_id" in msg:
+        return False
+    if "init_workflow:" in msg:
+        return False
+    return True
+
+loguru.logger.add(sys.stderr, level="DEBUG", filter=_log_filter)
+
+from db.models import Base
+from db.session import engine
+from routers import chat, tools, contracts, transactions, approval, wallet, data
 from grafi.common.containers.container import container, setup_tracing
 from grafi.common.instrumentations.tracing import TracingOptions
 
@@ -27,7 +57,7 @@ tracer = setup_tracing(
                 project_name="grafi-trace",
             )
 
-async def create_orchestration_assistant(generate_contract_assistant=None):
+async def create_orchestration_assistant(generate_contract_assistant=None, deployment_assistant=None):
     """Create the Orchestration Assistant with MCP tools"""
     mcp_server_url = os.getenv('MCP_SERVER_URL', 'http://localhost:8081/mcp/')
     print(f"Connecting to MCP server at: {mcp_server_url}")
@@ -53,6 +83,8 @@ async def create_orchestration_assistant(generate_contract_assistant=None):
         )
         if generate_contract_assistant is not None:
             builder = builder.generate_contract_assistant(generate_contract_assistant)
+        if deployment_assistant is not None:
+            builder = builder.deployment_assistant(deployment_assistant)
         assistant = builder.build()
         print("Orchestration assistant built successfully")
 
@@ -64,28 +96,28 @@ async def create_orchestration_assistant(generate_contract_assistant=None):
         return None
 
 async def create_generate_contract_assistant():
-    """Create the Generate Contract Assistant with MCP tools"""
-    mcp_server_url = os.getenv('MCP_SERVER_URL', 'http://localhost:8081/mcp/')
-    print(f"Connecting to MCP server for generate contract agent at: {mcp_server_url}")
+    """Create the Generate Contract Assistant with OpenZeppelin MCP tools"""
+    oz_mcp_url = os.getenv('OZ_MCP_SERVER_URL', 'http://localhost:8083/mcp/')
+    print(f"Connecting to OpenZeppelin MCP server at: {oz_mcp_url}")
 
-    mcp_config: Dict[str, StreamableHttpConnection] = {
-        "smart-contract-server": StreamableHttpConnection(
-            url=mcp_server_url,
+    oz_config: Dict[str, StreamableHttpConnection] = {
+        "openzeppelin-contracts": StreamableHttpConnection(
+            url=oz_mcp_url,
             transport="http"
         )
     }
 
     try:
-        print("Building MCP tool for generate contract agent...")
-        mcp_tool = await MCPTool.builder().connections(mcp_config).build()
-        print("MCP tool built successfully for generate contract agent")
+        print("Building OZ MCP tool for generate contract agent...")
+        oz_mcp_tool = await SafeMCPTool.builder().connections(oz_config).build()
+        print("OZ MCP tool built successfully for generate contract agent")
 
         print("Building generate contract assistant...")
         assistant = (GenerateContractAssistant.builder()
             .name("GenerateContractAgent")
             .model(os.getenv('OPENAI_MODEL', 'gpt-4o'))
             .api_key(os.getenv("OPENAI_API_KEY", ""))
-            .function_call_tool(mcp_tool)
+            .oz_mcp_tool(oz_mcp_tool)
             .build()
         )
         print("Generate contract assistant built successfully")
@@ -98,6 +130,41 @@ async def create_generate_contract_assistant():
         return None
 
 
+async def create_deployment_assistant():
+    """Create the Deployment Assistant with MCP tools"""
+    mcp_server_url = os.getenv('MCP_SERVER_URL', 'http://localhost:8081/mcp/')
+    print(f"Connecting to MCP server for deployment agent at: {mcp_server_url}")
+
+    mcp_config: Dict[str, StreamableHttpConnection] = {
+        "smart-contract-server": StreamableHttpConnection(
+            url=mcp_server_url,
+            transport="http"
+        )
+    }
+
+    try:
+        print("Building MCP tool for deployment agent...")
+        mcp_tool = await MCPTool.builder().connections(mcp_config).build()
+        print("MCP tool built successfully for deployment agent")
+
+        print("Building deployment assistant...")
+        assistant = (DeploymentAssistant.builder()
+            .name("DeploymentAgent")
+            .model(os.getenv('OPENAI_MODEL', 'gpt-4o'))
+            .api_key(os.getenv("OPENAI_API_KEY", ""))
+            .function_call_tool(mcp_tool)
+            .build()
+        )
+        print("Deployment assistant built successfully")
+
+        return assistant
+    except Exception as e:
+        print(f"Error building deployment assistant: {e}")
+        print(f"Error type: {type(e)}")
+        print("Running in fallback mode - deployment will not be available")
+        return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -106,6 +173,14 @@ async def lifespan(app: FastAPI):
     """
     app.state.assistant = None
     app.state.generate_contract_assistant = None
+    app.state.deployment_assistant = None
+
+    # Create database tables
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("Backend API: Database tables created successfully")
+    except Exception as e:
+        print(f"Backend API: Failed to create database tables: {e}")
 
     # Build generate contract assistant first (used by ReAct agent via AgentCallingTool)
     generate_contract_assistant = None
@@ -117,9 +192,19 @@ async def lifespan(app: FastAPI):
         print(f"Backend API: Failed to initialize generate contract assistant: {e}")
         print("Backend API: Contract generation will not be available")
 
-    # Build orchestration assistant, injecting the generate contract assistant
+    # Build deployment assistant (used by orchestration agent via AgentCallingTool)
+    deployment_assistant = None
     try:
-        assistant = await create_orchestration_assistant(generate_contract_assistant)
+        deployment_assistant = await create_deployment_assistant()
+        app.state.deployment_assistant = deployment_assistant
+        print("Backend API: deployment assistant built successfully")
+    except Exception as e:
+        print(f"Backend API: Failed to initialize deployment assistant: {e}")
+        print("Backend API: Deployment delegation will not be available")
+
+    # Build orchestration assistant, injecting sub-agents
+    try:
+        assistant = await create_orchestration_assistant(generate_contract_assistant, deployment_assistant)
         app.state.assistant = assistant
         print("Backend API: orchestration assistant built successfully")
     except Exception as e:
@@ -134,6 +219,7 @@ async def lifespan(app: FastAPI):
     finally:
         app.state.assistant = None
         app.state.generate_contract_assistant = None
+        app.state.deployment_assistant = None
         print("Backend API: Lifespan shutdown complete")
 
 app = FastAPI(title="Smart Contract Assistant API", version="1.0.0", lifespan=lifespan)
@@ -157,6 +243,7 @@ app.include_router(contracts.router)
 app.include_router(transactions.router)
 app.include_router(approval.router)
 app.include_router(wallet.router)
+app.include_router(data.router)
 
 @app.get("/")
 async def root():

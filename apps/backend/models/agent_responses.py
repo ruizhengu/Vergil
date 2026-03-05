@@ -8,10 +8,6 @@ class ReasoningResponse(BaseModel):
         ge=0.0, le=1.0,
         description="Confidence level in the reasoning (0-1)"
     )
-    requires_compile: bool = Field(
-        default=False,
-        description="Whether this request requires compiling a Solidity contract"
-    )
     requires_deployment: bool = Field(
         default=False,
         description="Whether this reasoning requires deploying a compiled smart contract"
