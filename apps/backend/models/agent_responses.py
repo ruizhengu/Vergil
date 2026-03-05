@@ -1,5 +1,6 @@
-from typing import Optional, List, Literal, Union, Dict
-from pydantic import BaseModel, Field
+import re
+from typing import Optional, List, Literal, Union, Dict, Any
+from pydantic import BaseModel, Field, ValidationError as PydanticValidationError, field_validator
 
 
 class ReasoningResponse(BaseModel):
@@ -7,10 +8,6 @@ class ReasoningResponse(BaseModel):
     confidence: float = Field(
         ge=0.0, le=1.0,
         description="Confidence level in the reasoning (0-1)"
-    )
-    requires_compile: bool = Field(
-        default=False,
-        description="Whether this request requires compiling a Solidity contract"
     )
     requires_deployment: bool = Field(
         default=False,
@@ -91,6 +88,61 @@ class FinalAgentResponse(BaseModel):
         default=None,
         description="Any warnings or important notes"
     )
+
+class FinancialAction(BaseModel):
+    amount: float = Field(
+        gt=0,
+        le=5.0,
+        description="Amount in ETH units, must be > 0 and <= 5.0"
+    )
+    asset: Literal["ETH", "USDC", "WETH"] = Field(
+        description="Asset ticker"
+    )
+    target_address: str = Field(
+        description="Target Ethereum address"
+    )
+
+    @field_validator("target_address")
+    @classmethod
+    def validate_target_address(cls, value: str) -> str:
+        if not value or not isinstance(value, str):
+            raise ValueError("target_address must be a string")
+        if len(value) != 42:
+            raise ValueError("target_address must be exactly 42 characters (0x + 40 hex)")
+        if not value.startswith("0x"):
+            raise ValueError("target_address must start with 0x")
+        hex_part = value[2:]
+        try:
+            int(hex_part, 16)
+        except ValueError:
+            raise ValueError("target_address contains invalid hexadecimal characters")
+        return value
+
+
+class StructuredValidationError(BaseModel):
+    layer: Literal["pydantic_guardrail", "smt_logic_preparation"]
+    message: str
+    details: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class SMTState(BaseModel):
+    pre_condition: Dict[str, Any]
+    post_condition: Dict[str, Any]
+    action: FinancialAction
+
+
+def build_validation_error(
+    layer: Literal["pydantic_guardrail", "smt_logic_preparation"],
+    message: str,
+    error: Optional[Exception] = None,
+) -> StructuredValidationError:
+    details: List[Dict[str, Any]] = []
+    if isinstance(error, PydanticValidationError):
+        details = error.errors()
+    elif error is not None:
+        details = [{"error": str(error)}]
+    return StructuredValidationError(layer=layer, message=message, details=details)
+
 
 AgentResponse = Union[
     ReasoningResponse,

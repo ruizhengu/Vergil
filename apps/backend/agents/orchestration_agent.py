@@ -2,7 +2,7 @@ import os
 import json
 
 from pathlib import Path
-from typing import Optional, List, Any
+from typing import Dict, Optional, Any
 from dotenv import load_dotenv
 from pydantic import Field
 
@@ -14,7 +14,6 @@ from grafi.topics.expressions.subscription_builder import SubscriptionBuilder
 from grafi.topics.topic_impl.topic import Topic
 from grafi.topics.topic_impl.in_workflow_input_topic import InWorkflowInputTopic
 from grafi.topics.topic_impl.in_workflow_output_topic import InWorkflowOutputTopic
-from grafi.common.models.function_spec import FunctionSpec
 from grafi.common.models.invoke_context import InvokeContext
 from grafi.common.events.topic_events.publish_to_topic_event import PublishToTopicEvent
 from grafi.nodes.node import Node
@@ -64,12 +63,15 @@ def load_prompt(file_path: str) -> str:
 
 
 backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-COMPILE_ACTION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "compile_action.md"))
 REASONING_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "reasoning.md"))
-DEPLOYMENT_REQUEST_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "deployment_request.md"))
 DEPLOYMENT_APPROVAL_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "deployment_approval.md"))
 FINAL_OUTPUT_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "final_output.md"))
 CONTRACT_GENERATION_DELEGATION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "contract_generation_delegation.md"))
+DEPLOYMENT_DELEGATION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "deployment_delegation.md"))
+CONTRACT_VERIFICATION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "contract_verification.md"))
+
+# Track verification retries per invoke_id (max 2 retries before proceeding with warnings)
+_verification_retries: Dict[str, int] = {}
 
 
 class OrchestrationAssistant(Assistant):
@@ -79,25 +81,11 @@ class OrchestrationAssistant(Assistant):
     model: str = Field(default_factory=lambda: os.getenv('ZAI_MODEL', 'glm-4.7'))
     function_call_tool: Optional[MCPTool] = Field(default=None)
     generate_contract_assistant: Optional[Any] = Field(default=None)
+    deployment_assistant: Optional[Any] = Field(default=None)
 
     @classmethod
     def builder(cls):
         return OrchestrationAssistantBuilder(cls)
-
-    def get_function_specs_from_mcp_tool(self) -> List[FunctionSpec]:
-        """Extract function specs from the MCP tool."""
-        if self.function_call_tool is None:
-            raise ValueError("function_call_tool is required to extract function specs")
-        return self.function_call_tool.function_specs
-
-    def get_compile_function_specs(self) -> List[FunctionSpec]:
-        """Extract only compile-related function specs from the MCP tool."""
-        if self.function_call_tool is None:
-            raise ValueError("function_call_tool is required to extract function specs")
-        return [
-            spec for spec in self.function_call_tool.function_specs
-            if spec.name == "compile_contract"
-        ]
 
     def _construct_workflow(self):
         if self.function_call_tool is None:
@@ -117,23 +105,28 @@ class OrchestrationAssistant(Assistant):
             content = msg.content
             if isinstance(content, str):
                 try:
-                    return json.loads(content)
+                    parsed = json.loads(content)
+                    print(f"[_parse_reasoning] Parsed from string: {parsed}", flush=True)
+                    return parsed
                 except (json.JSONDecodeError, ValueError):
                     return None
             if isinstance(content, dict):
+                print(f"[_parse_reasoning] Content is dict: {content}", flush=True)
                 return content
             # Pydantic model - convert to dict
             if hasattr(content, 'model_dump'):
-                return content.model_dump()
+                dumped = content.model_dump()
+                print(f"[_parse_reasoning] model_dump: {dumped}", flush=True)
+                return dumped
             if hasattr(content, '__dict__'):
                 return vars(content)
+            print(f"[_parse_reasoning] Could not parse content type: {type(content)}", flush=True)
             return None
 
         reasoning_output_topic = Topic(
             name="reasoning_output_topic",
             condition=lambda event: any(
                 (parsed := _parse_reasoning(msg)) is not None and
-                not parsed.get('requires_compile', False) and
                 not parsed.get('requires_deployment', False) and
                 not parsed.get('requires_contract_generation', False)
                 for msg in event.data
@@ -149,28 +142,87 @@ class OrchestrationAssistant(Assistant):
             )
         )
 
-        compile_topic = Topic(
-            name="compile_topic",
-            condition=lambda event: any(
-                (parsed := _parse_reasoning(msg)) is not None and
-                parsed.get('requires_compile', False)
-                for msg in event.data
-            )
+        deployment_approval_topic = InWorkflowInputTopic(
+            name="deployment_approval_topic",
         )
-
-        compile_action_output_topic = Topic(name="compile_action_output_topic")
-        compile_tool_output_topic = Topic(name="compile_tool_output_topic")
-
-        deployment_approval_topic = InWorkflowInputTopic(name="deployment_approval_topic")
         prepare_deployment_output_topic = InWorkflowOutputTopic(
             name="prepare_deployment_output_topic",
-            paired_in_workflow_input_topic_name="prepare_deployment_output_topic"
+            paired_in_workflow_input_topic_names=["deployment_approval_topic"],
         )
         broadcast_deployment_output_topic = Topic(name="broadcast_deployment_output_topic")
-        deployment_request_output_topic = Topic(name="deployment_request_output_topic")
         deployment_approval_output_topic = Topic(name="deployment_approval_output_topic")
+        deployment_delegation_output_topic = Topic(name="deployment_delegation_output_topic")
 
         contract_agent_result_topic = Topic(name="contract_agent_result_topic")
+
+        # --- Verification Topics ---
+        def _parse_verification(msg):
+            """Parse verification result from message content."""
+            if not hasattr(msg, 'content') or not msg.content:
+                return None
+            content = msg.content
+            if isinstance(content, str):
+                try:
+                    return json.loads(content)
+                except (json.JSONDecodeError, ValueError):
+                    return None
+            if isinstance(content, dict):
+                return content
+            if hasattr(content, 'model_dump'):
+                return content.model_dump()
+            if hasattr(content, '__dict__'):
+                return vars(content)
+            return None
+
+        def _get_retry_count(event) -> int:
+            """Get current retry count from event context."""
+            invoke_id = "default"
+            if hasattr(event, 'invoke_context') and hasattr(event.invoke_context, 'invoke_id'):
+                invoke_id = event.invoke_context.invoke_id
+            return _verification_retries.get(invoke_id, 0)
+
+        def _check_verification_pass(event) -> bool:
+            """Check if verification passed or max retries reached."""
+            passed = any(
+                (parsed := _parse_verification(msg)) is not None and
+                parsed.get('pass_verification', False)
+                for msg in event.data
+            )
+            if passed:
+                return True
+            # If failed but max retries reached, pass anyway (with warnings in the data)
+            if _get_retry_count(event) >= 2:
+                return True
+            return False
+
+        def _check_verification_fail(event) -> bool:
+            """Check if verification failed and retries remain. Increments retry counter."""
+            failed = any(
+                (parsed := _parse_verification(msg)) is not None and
+                not parsed.get('pass_verification', True)
+                for msg in event.data
+            )
+            if not failed:
+                return False
+            retries = _get_retry_count(event)
+            if retries >= 2:
+                return False  # Max retries reached, will route to pass topic instead
+            # Increment retry counter
+            invoke_id = "default"
+            if hasattr(event, 'invoke_context') and hasattr(event.invoke_context, 'invoke_id'):
+                invoke_id = event.invoke_context.invoke_id
+            _verification_retries[invoke_id] = retries + 1
+            return True
+
+        verification_pass_topic = Topic(
+            name="verification_pass_topic",
+            condition=_check_verification_pass
+        )
+
+        verification_fail_topic = Topic(
+            name="verification_fail_topic",
+            condition=_check_verification_fail
+        )
 
         deployment_topic = Topic(
             name="deployment_topic",
@@ -191,11 +243,9 @@ class OrchestrationAssistant(Assistant):
                 SubscriptionBuilder()
                 .subscribed_to(agent_input_topic)
                 .or_()
-                .subscribed_to(compile_tool_output_topic)
-                .or_()
                 .subscribed_to(broadcast_deployment_output_topic)
                 .or_()
-                .subscribed_to(contract_agent_result_topic)
+                .subscribed_to(verification_pass_topic)
                 .build()
             )
             .tool(
@@ -208,7 +258,6 @@ class OrchestrationAssistant(Assistant):
             )
             .publish_to(reasoning_output_topic)
             .publish_to(contract_generation_topic)
-            .publish_to(compile_topic)
             .publish_to(deployment_topic)
             .build()
         )
@@ -270,6 +319,9 @@ class OrchestrationAssistant(Assistant):
             async def call_generate_agent(invoke_context, message):
                 """Invoke the generate contract assistant and collect results."""
                 import uuid
+                import time as _time
+                _start = _time.time()
+                print(f"[OrchestrationAgent] Invoking generate contract agent...")
                 # Create a fresh invoke context for the sub-agent to avoid
                 # topic name collisions with the parent orchestration workflow
                 child_context = InvokeContext(
@@ -286,11 +338,20 @@ class OrchestrationAssistant(Assistant):
                     consumed_events=[],
                 )
                 result_content = ""
+                event_count = 0
                 async for response_event in self.generate_contract_assistant.invoke(input_event):
+                    event_count += 1
+                    elapsed = _time.time() - _start
+                    topic = getattr(response_event, 'topic_name', 'unknown')
+                    print(f"[GenerateContractAgent] Event #{event_count} from '{topic}' at {elapsed:.1f}s")
                     if hasattr(response_event, 'data') and response_event.data:
                         for msg in response_event.data:
                             if hasattr(msg, 'content') and msg.content:
+                                content_preview = str(msg.content)[:100]
+                                print(f"[GenerateContractAgent]   content: {content_preview}...")
                                 result_content = msg.content
+                total = _time.time() - _start
+                print(f"[GenerateContractAgent] Completed in {total:.1f}s with {event_count} events")
                 return {"content": result_content}
 
             agent_calling_tool = (
@@ -314,6 +375,8 @@ class OrchestrationAssistant(Assistant):
                 .subscribe(
                     SubscriptionBuilder()
                     .subscribed_to(contract_generation_topic)
+                    .or_()
+                    .subscribed_to(verification_fail_topic)
                     .build()
                 )
                 .tool(contract_delegation_zai_tool)
@@ -335,6 +398,53 @@ class OrchestrationAssistant(Assistant):
                 .build()
             )
 
+        # Verification nodes — LLM + MCP tool pattern (action → tool)
+        verification_action_output_topic = Topic(name="verification_action_output_topic")
+
+        verification_openai_tool = (
+            OpenAITool.builder()
+            .name("verification_llm")
+            .api_key(self.api_key)
+            .model(self.model)
+            .system_message(CONTRACT_VERIFICATION_PROMPT)
+            .build()
+        )
+        # Add verify_contract_code function spec from MCP tool
+        verification_specs = [
+            spec for spec in self.function_call_tool.function_specs
+            if spec.name == "verify_contract_code"
+        ]
+        verification_openai_tool.add_function_specs(verification_specs)
+
+        verification_action_node = (
+            Node.builder()
+            .name("verification_action_node")
+            .type("verification_action_node")
+            .subscribe(
+                SubscriptionBuilder()
+                .subscribed_to(contract_agent_result_topic)
+                .build()
+            )
+            .tool(verification_openai_tool)
+            .publish_to(verification_action_output_topic)
+            .build()
+        )
+
+        verification_tool_node = (
+            Node.builder()
+            .name("verification_tool_node")
+            .type("verification_tool_node")
+            .subscribe(
+                SubscriptionBuilder()
+                .subscribed_to(verification_action_output_topic)
+                .build()
+            )
+            .tool(self.function_call_tool)
+            .publish_to(verification_pass_topic)
+            .publish_to(verification_fail_topic)
+            .build()
+        )
+
         # Output node
         output_node = (
             Node.builder()
@@ -346,39 +456,19 @@ class OrchestrationAssistant(Assistant):
                 .build()
             )
             .tool(
-                ZaiTool.builder()
+                OpenAITool.builder()
                 .name("output_llm")
-                
+                .api_key(self.api_key)
                 .model(self.model)
                 .system_message(FINAL_OUTPUT_PROMPT)
+                .chat_params({"response_format": FinalAgentResponse})
                 .build()
             )
             .publish_to(agent_output_topic)
             .build()
         )
 
-        # Deployment nodes
-        deployment_request_node = (
-            Node.builder()
-            .name("deployment_request_node")
-            .type("deployment_request_node")
-            .subscribe(
-                SubscriptionBuilder()
-                .subscribed_to(deployment_topic)
-                .build()
-            )
-            .tool(
-                ZaiTool.builder()
-                .name("deployment_request_llm")
-                
-                .model(self.model)
-                .system_message(DEPLOYMENT_REQUEST_PROMPT)
-                .build()
-            )
-            .publish_to(deployment_request_output_topic)
-            .build()
-        )
-
+        # Deployment approval node (resumes after wallet signing)
         deployment_approval_node = (
             Node.builder()
             .name("deployment_approval_node")
@@ -400,20 +490,7 @@ class OrchestrationAssistant(Assistant):
             .build()
         )
 
-        prepare_deployment_node = (
-            Node.builder()
-            .name("prepare_deployment_node")
-            .type("prepare_deployment_node")
-            .subscribe(
-                SubscriptionBuilder()
-                .subscribed_to(deployment_request_output_topic)
-                .build()
-            )
-            .tool(self.function_call_tool)
-            .publish_to(prepare_deployment_output_topic)
-            .build()
-        )
-
+        # Broadcast signed transaction after approval
         broadcast_deployment_node = (
             Node.builder()
             .name("broadcast_deployment_node")
@@ -428,17 +505,90 @@ class OrchestrationAssistant(Assistant):
             .build()
         )
 
+        # Deployment delegation (AgentCallingTool pattern — same as contract generation)
+        deployment_delegation_openai_tool = (
+            OpenAITool.builder()
+            .name("deployment_delegation_llm")
+            .api_key(self.api_key)
+            .model(self.model)
+            .system_message(DEPLOYMENT_DELEGATION_PROMPT)
+            .build()
+        )
+
+        if self.deployment_assistant is not None:
+            async def call_deployment_agent(invoke_context, message):
+                """Invoke the deployment assistant and collect results."""
+                import uuid as _uuid
+                child_context = InvokeContext(
+                    conversation_id=invoke_context.conversation_id,
+                    invoke_id=_uuid.uuid4().hex,
+                    assistant_request_id=_uuid.uuid4().hex,
+                )
+                input_event = PublishToTopicEvent(
+                    invoke_context=child_context,
+                    publisher_name="orchestration_agent_deployment_delegation",
+                    publisher_type="agent",
+                    topic_name="agent_input_topic",
+                    data=[message],
+                    consumed_events=[],
+                )
+                result_content = ""
+                async for response_event in self.deployment_assistant.invoke(input_event):
+                    if hasattr(response_event, 'data') and response_event.data:
+                        for msg in response_event.data:
+                            if hasattr(msg, 'content') and msg.content:
+                                result_content = msg.content
+                return {"content": result_content}
+
+            deployment_agent_calling_tool = (
+                AgentCallingTool.builder()
+                .agent_name("deployment_agent")
+                .agent_description(
+                    "Handle contract deployment: compile if needed, then prepare deployment transaction. "
+                    "Pass the full deployment context including any Solidity code, compilation IDs, and wallet addresses."
+                )
+                .argument_description("The deployment request with all relevant context")
+                .agent_call(call_deployment_agent)
+                .build()
+            )
+
+            deployment_delegation_openai_tool.add_function_specs(deployment_agent_calling_tool.function_specs)
+
+            deployment_delegation_node = (
+                Node.builder()
+                .name("deployment_delegation_node")
+                .type("deployment_delegation_node")
+                .subscribe(
+                    SubscriptionBuilder()
+                    .subscribed_to(deployment_topic)
+                    .build()
+                )
+                .tool(deployment_delegation_openai_tool)
+                .publish_to(deployment_delegation_output_topic)
+                .build()
+            )
+
+            deployment_agent_execution_node = (
+                Node.builder()
+                .name("deployment_agent_execution_node")
+                .type("deployment_agent_execution_node")
+                .subscribe(
+                    SubscriptionBuilder()
+                    .subscribed_to(deployment_delegation_output_topic)
+                    .build()
+                )
+                .tool(deployment_agent_calling_tool)
+                .publish_to(prepare_deployment_output_topic)
+                .build()
+            )
+
         # --- Build Workflow ---
         workflow_builder = (
             EventDrivenWorkflow.builder()
             .name("orchestration_workflow")
             .node(reasoning_node)
-            .node(compile_action_node)
-            .node(compile_tool_node)
             .node(output_node)
-            .node(deployment_request_node)
             .node(deployment_approval_node)
-            .node(prepare_deployment_node)
             .node(broadcast_deployment_node)
         )
 
@@ -447,6 +597,15 @@ class OrchestrationAssistant(Assistant):
                 workflow_builder
                 .node(contract_delegation_node)
                 .node(contract_agent_execution_node)
+                .node(verification_action_node)
+                .node(verification_tool_node)
+            )
+
+        if self.deployment_assistant is not None:
+            workflow_builder = (
+                workflow_builder
+                .node(deployment_delegation_node)
+                .node(deployment_agent_execution_node)
             )
 
         self.workflow = workflow_builder.build()
@@ -469,4 +628,8 @@ class OrchestrationAssistantBuilder(AssistantBaseBuilder):
 
     def generate_contract_assistant(self, generate_contract_assistant):
         self.kwargs["generate_contract_assistant"] = generate_contract_assistant
+        return self
+
+    def deployment_assistant(self, deployment_assistant):
+        self.kwargs["deployment_assistant"] = deployment_assistant
         return self

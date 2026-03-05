@@ -11,6 +11,9 @@ from grafi.common.events.topic_events.publish_to_topic_event import PublishToTop
 from grafi.topics.topic_impl.in_workflow_input_topic import InWorkflowInputTopic
 from grafi.topics.topic_impl.in_workflow_output_topic import InWorkflowOutputTopic
 
+from db.session import SessionLocal
+from db import repository as db_repo
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -98,19 +101,69 @@ async def submit_approval_response(approval_response: ApprovalResponse, request:
                 detail="Smart contract assistant not available"
             )
 
-        # Create invoke context for the approval response
+        # Look up the original approval request to get workflow context
+        approval_data = approval_requests.get(approval_response.approval_id)
+        if not approval_data:
+            logger.warning(f"Approval request {approval_response.approval_id} not found")
+            logger.info(f"Available approval request IDs: {list(approval_requests.keys())}")
+            return ApprovalSubmitResponse(
+                success=False,
+                message="Approval request not found",
+                error=f"Unknown approval_id: {approval_response.approval_id}"
+            )
+
+        # Use the original conversation context to resume the workflow
+        original_conversation_id = approval_data.get("conversation_id", uuid.uuid4().hex)
+        original_invoke_id = approval_data.get("invoke_id", uuid.uuid4().hex)
+        original_request_id = approval_data.get("assistant_request_id", uuid.uuid4().hex)
+
         invoke_context = InvokeContext(
-            conversation_id=uuid.uuid4().hex,
-            invoke_id=uuid.uuid4().hex,
-            assistant_request_id=uuid.uuid4().hex,
+            conversation_id=original_conversation_id,
+            invoke_id=original_invoke_id,
+            assistant_request_id=original_request_id,
         )
 
+        # Mark the approval request as processed
+        approval_data["processed"] = True
+
+        # Check if wallet already broadcast the transaction (sendTransaction fallback)
+        signed_hex = approval_response.signed_transaction_hex or ""
+        already_broadcast = signed_hex.startswith("ALREADY_BROADCAST:")
+
+        if approval_response.approved and already_broadcast:
+            # Wallet already sent the tx — no need to resume workflow for broadcast
+            tx_hash = signed_hex.replace("ALREADY_BROADCAST:", "")
+            logger.info(f"Transaction already broadcast by wallet. Hash: {tx_hash}")
+
+            # Save deployment record to DB
+            try:
+                db = SessionLocal()
+                try:
+                    deployment_details = approval_data.get("deployment_details", {})
+                    db_repo.save_deployment(
+                        session=db,
+                        compilation_id_ref=None,
+                        transaction_hash=tx_hash,
+                        deployer_address=deployment_details.get("user_address"),
+                        chain_id=deployment_details.get("chain_id", 11155111),
+                        status="deployed",
+                    )
+                    logger.info(f"DB: Saved deployment with tx_hash {tx_hash}")
+                finally:
+                    db.close()
+            except Exception as db_error:
+                logger.error(f"DB: Error saving deployment: {db_error}")
+
+            return ApprovalSubmitResponse(
+                success=True,
+                message=f"Transaction already broadcast by wallet. Hash: {tx_hash}"
+            )
+
         # Format the approval response message
-        if approval_response.approved:
-            if approval_response.signed_transaction_hex:
-                response_content = f"APPROVED: Deployment approved by user. Signed transaction: {approval_response.signed_transaction_hex}"
-            else:
-                response_content = "APPROVED: Deployment approved by user. Please proceed with transaction preparation."
+        if approval_response.approved and signed_hex:
+            response_content = f"APPROVED: Deployment approved by user. Signed transaction: {signed_hex}"
+        elif approval_response.approved:
+            response_content = "APPROVED: Deployment approved by user. Please proceed with transaction preparation."
         else:
             reason = approval_response.rejection_reason or "User rejected deployment"
             response_content = f"REJECTED: {reason}"
@@ -120,40 +173,55 @@ async def submit_approval_response(approval_response: ApprovalResponse, request:
             role="user",
             content=response_content
         )
-        
-        # Create input event for the approval input topic
-        # We need to publish this to the workflow's approval input topic
+
+        # Get the paused event ID from the InWorkflowOutputTopic — required for workflow resume
+        paused_event_id = approval_data.get("paused_event_id")
+        consumed_ids = [paused_event_id] if paused_event_id else []
+
+        # Create input event targeting the InWorkflowInputTopic to resume the paused workflow
         input_event = PublishToTopicEvent(
             invoke_context=invoke_context,
             publisher_name="approval_api",
             publisher_type="api",
-            topic_name="deployment_approval_input",
+            topic_name="deployment_approval_topic",
             data=[approval_message],
-            consumed_events=[]
+            consumed_event_ids=consumed_ids,
         )
 
         logger.info(f"Submitting approval response: {response_content[:100]}...")
-        
-        # Send the approval response back to the workflow
-        # Note: This is a simplified approach. In production, you'd want to
-        # directly publish to the InWorkflowInputTopic
-        
-        # For now, we'll use the assistant's invoke method to process the approval
-        response_count = 0
-        async for response_event in assistant.a_invoke(input_event):
-            response_count += 1
-            logger.info(f"Approval response processed, got {response_count} events back")
-        
-        # Mark the approval request as processed
-        if approval_response.approval_id in approval_requests:
-            approval_requests[approval_response.approval_id]["processed"] = True
-            logger.info(f"Marked approval request {approval_response.approval_id} as processed")
+        logger.info(f"Resuming workflow with conversation_id={original_conversation_id}, invoke_id={original_invoke_id}, paused_event_id={paused_event_id}")
+
+        if approval_response.approved and signed_hex:
+            # Resume the workflow by publishing to the InWorkflowInputTopic
+            response_count = 0
+            async for response_event in assistant.invoke(input_event):
+                response_count += 1
+                topic = getattr(response_event, 'topic_name', 'unknown')
+                logger.info(f"Approval workflow event #{response_count} from '{topic}'")
+
+            # After workflow resume, save deployment record if we have a signed tx
+            try:
+                db = SessionLocal()
+                try:
+                    deployment_details = approval_data.get("deployment_details", {})
+                    db_repo.save_deployment(
+                        session=db,
+                        compilation_id_ref=None,
+                        transaction_hash=None,  # tx_hash not available here; broadcast happens in workflow
+                        deployer_address=deployment_details.get("user_address"),
+                        chain_id=deployment_details.get("chain_id", 11155111),
+                        status="pending",
+                    )
+                    logger.info(f"DB: Saved pending deployment record after workflow resume")
+                finally:
+                    db.close()
+            except Exception as db_error:
+                logger.error(f"DB: Error saving deployment after resume: {db_error}")
         else:
-            logger.warning(f"Approval request {approval_response.approval_id} not found in approval_requests")
-            logger.info(f"Available approval request IDs: {list(approval_requests.keys())}")
+            logger.info("Rejection or no signed tx — workflow not resumed")
 
         logger.info("Approval response submitted successfully")
-        
+
         return ApprovalSubmitResponse(
             success=True,
             message="Approval response submitted successfully"

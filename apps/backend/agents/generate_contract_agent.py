@@ -1,5 +1,6 @@
 import os
 import json
+import time
 
 from pathlib import Path
 from typing import Optional, List
@@ -30,8 +31,12 @@ GENERIC_ACTION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "generi
 CUSTOM_GENERATION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "custom_generation.md"))
 GENERATE_OUTPUT_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "generate_output.md"))
 
-# Tool names relevant to contract generation
-GENERATION_TOOL_NAMES = {"generate_erc20_contract", "generate_erc721_contract"}
+# Tool names relevant to contract generation (OpenZeppelin MCP tools)
+GENERATION_TOOL_NAMES = {
+    "solidity-erc20", "solidity-erc721", "solidity-erc1155",
+    "solidity-stablecoin", "solidity-rwa", "solidity-account",
+    "solidity-governor", "solidity-custom"
+}
 
 
 class GenerateContractAssistant(Assistant):
@@ -46,19 +51,19 @@ class GenerateContractAssistant(Assistant):
         return GenerateContractAssistantBuilder(cls)
 
     def get_generation_function_specs(self) -> List[FunctionSpec]:
-        """Extract only contract generation function specs from the MCP tool."""
-        if self.function_call_tool is None:
-            raise ValueError("function_call_tool is required to extract function specs")
+        """Extract only contract generation function specs from the OZ MCP tool."""
+        if self.oz_mcp_tool is None:
+            raise ValueError("oz_mcp_tool is required to extract function specs")
         return [
-            spec for spec in self.function_call_tool.function_specs
+            spec for spec in self.oz_mcp_tool.function_specs
             if spec.name in GENERATION_TOOL_NAMES
         ]
 
     def _construct_workflow(self):
-        if self.function_call_tool is None:
+        if self.oz_mcp_tool is None:
             raise ValueError(
-                "function_call_tool is required for GenerateContractAssistant. "
-                "Use GenerateContractAssistant.builder().function_call_tool(...).build()"
+                "oz_mcp_tool is required for GenerateContractAssistant. "
+                "Use GenerateContractAssistant.builder().oz_mcp_tool(...).build()"
             )
 
         # --- Topics ---
@@ -88,7 +93,7 @@ class GenerateContractAssistant(Assistant):
             name="generic_topic",
             condition=lambda event: any(
                 (parsed := _parse_intent(msg)) is not None
-                and parsed.get("intent", "") in ("generic_erc20", "generic_erc721")
+                and parsed.get("intent", "") in ("generic_erc20", "generic_erc721", "generic_erc1155")
                 for msg in event.data
             ),
         )
@@ -153,6 +158,9 @@ class GenerateContractAssistant(Assistant):
             .build()
         )
         generation_specs = self.get_generation_function_specs()
+        print(f"[GenerateContractAgent] OZ generation specs count: {len(generation_specs)}")
+        for spec in generation_specs:
+            print(f"[GenerateContractAgent]   - {spec.name}")
         generic_action_openai_tool.add_function_specs(generation_specs)
 
         generic_action_node = (
@@ -179,7 +187,7 @@ class GenerateContractAssistant(Assistant):
                 .subscribed_to(generic_tool_output_topic)
                 .build()
             )
-            .tool(self.function_call_tool)
+            .tool(self.oz_mcp_tool)
             .publish_to(code_ready_topic)
             .build()
         )
@@ -254,6 +262,6 @@ class GenerateContractAssistantBuilder(AssistantBaseBuilder):
         self.kwargs["model"] = model
         return self
 
-    def function_call_tool(self, function_call_tool):
-        self.kwargs["function_call_tool"] = function_call_tool
+    def oz_mcp_tool(self, oz_mcp_tool):
+        self.kwargs["oz_mcp_tool"] = oz_mcp_tool
         return self

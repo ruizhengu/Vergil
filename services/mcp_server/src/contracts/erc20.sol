@@ -3,6 +3,7 @@ pragma solidity ^0.8.27;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 {% if mintable or ownable or pausable or capped %}import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";{% endif %}
+{% if ownable %}import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";{% endif %}
 {% if burnable %}import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";{% endif %}
 {% if pausable %}import {ERC20Pausable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Pausable.sol";{% endif %}
 {% if permit %}import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";{% endif %}
