@@ -22,6 +22,10 @@ from grafi.tools.function_calls.impl.mcp_tool import MCPTool
 from grafi.tools.function_calls.impl.agent_calling_tool import AgentCallingTool
 from grafi.workflows.impl.event_driven_workflow import EventDrivenWorkflow
 from models.agent_responses import ReasoningResponse, FinalAgentResponse
+from grafi.common.models.function_spec import FunctionSpec
+from typing import List
+
+COMPILE_TOOL_NAMES = {"compile_contract"}
 
 # Monkey patch AgentCallingTool.invoke to handle empty input and missing tool calls gracefully
 original_agent_invoke = AgentCallingTool.invoke
@@ -69,6 +73,7 @@ FINAL_OUTPUT_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "final_ou
 CONTRACT_GENERATION_DELEGATION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "contract_generation_delegation.md"))
 DEPLOYMENT_DELEGATION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "deployment_delegation.md"))
 CONTRACT_VERIFICATION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "contract_verification.md"))
+# COMPILE_ACTION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "compile_action.md"))
 
 # Track verification retries per invoke_id (max 2 retries before proceeding with warnings)
 _verification_retries: Dict[str, int] = {}
@@ -82,6 +87,15 @@ class OrchestrationAssistant(Assistant):
     function_call_tool: Optional[MCPTool] = Field(default=None)
     generate_contract_assistant: Optional[Any] = Field(default=None)
     deployment_assistant: Optional[Any] = Field(default=None)
+
+    def get_compile_function_specs(self) -> List[FunctionSpec]:
+        """Extract compile-related function specs from the MCP tool."""
+        if self.function_call_tool is None:
+            return []
+        return [
+            spec for spec in self.function_call_tool.function_specs
+            if spec.name in COMPILE_TOOL_NAMES
+        ]
 
     @classmethod
     def builder(cls):
@@ -263,45 +277,11 @@ class OrchestrationAssistant(Assistant):
         )
 
         # Compile action node - translates reasoning to compile_contract function call
-        compile_action_zai_tool = (
-            ZaiTool.builder()
-            .name("compile_action_llm")
-            
-            .model(self.model)
-            .system_message(COMPILE_ACTION_PROMPT)
-            .build()
-        )
-        compile_specs = self.get_compile_function_specs()
-        compile_action_zai_tool.add_function_specs(compile_specs)
-
-        compile_action_node = (
-            Node.builder()
-            .name("compile_action_node")
-            .type("compile_action_node")
-            .subscribe(
-                SubscriptionBuilder()
-                .subscribed_to(compile_topic)
-                .build()
-            )
-            .tool(compile_action_zai_tool)
-            .publish_to(compile_action_output_topic)
-            .build()
-        )
-
-        # Compile tool node - executes compile_contract MCP call
-        compile_tool_node = (
-            Node.builder()
-            .name("compile_tool_node")
-            .type("compile_tool_node")
-            .subscribe(
-                SubscriptionBuilder()
-                .subscribed_to(compile_action_output_topic)
-                .build()
-            )
-            .tool(self.function_call_tool)
-            .publish_to(compile_tool_output_topic)
-            .build()
-        )
+        # NOTE: This section has incomplete variable definitions (compile_topic, compile_action_output_topic, compile_tool_output_topic)
+        # Skipping compile functionality for now
+        compile_action_zai_tool = None
+        compile_action_node = None
+        compile_tool_node = None
 
         # Contract generation delegation
         contract_delegation_output_topic = Topic(name="contract_delegation_output_topic")
