@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 from typing import Any
 from typing import Dict
 from typing import List
@@ -59,7 +58,7 @@ class ZaiTool(LLM):
 
     def prepare_api_input(
         self, input_data: Messages
-    ) -> tuple[List[Dict[str, Any]], None]:
+    ) -> tuple[List[Dict[str, Any]], Optional[List[Dict[str, Any]]]]:
         api_messages: List[Dict[str, Any]] = (
             [
                 {
@@ -72,48 +71,105 @@ class ZaiTool(LLM):
         )
 
         for m in input_data:
-            msg_dict: Dict[str, Any] = {
-                "role": m.role,
-                "content": m.content or "",
-            }
-            # Only include name if it's really needed (e.g. for tool roles)
-            if m.name and m.role == "tool":
-                msg_dict["name"] = m.name
-            
-            if m.tool_call_id:
-                msg_dict["tool_call_id"] = m.tool_call_id
-            
-            if m.tool_calls:
-                # Ensure tool_calls are serialized to dicts
+            role = m.role or "user"
+            content_str = m.content if isinstance(m.content, str) else (
+                json.dumps(m.content) if m.content is not None else ""
+            )
+
+            # Z.AI is strict about message format — only include fields that are
+            # non-None and relevant for the given role.
+            if role == "system":
+                # System messages in the middle get converted to user messages
+                # (Z.AI only allows system as the first message)
+                if api_messages and api_messages[-1]["role"] != "system":
+                    msg_dict: Dict[str, Any] = {
+                        "role": "user",
+                        "content": f"[System context] {content_str}",
+                    }
+                else:
+                    msg_dict = {
+                        "role": "system",
+                        "content": content_str,
+                    }
+            elif role == "tool":
+                # Tool result messages require tool_call_id and content
+                msg_dict = {
+                    "role": "tool",
+                    "content": content_str,
+                }
+                if m.tool_call_id:
+                    msg_dict["tool_call_id"] = m.tool_call_id
+                if m.name:
+                    msg_dict["name"] = m.name
+            elif role == "assistant" and m.tool_calls:
+                # Assistant messages with tool_calls
                 serialized_tool_calls = []
                 for tc in m.tool_calls:
                     try:
                         if hasattr(tc, 'model_dump'):
-                            serialized_tool_calls.append(tc.model_dump())
+                            tc_dict = tc.model_dump()
                         elif hasattr(tc, 'dict'):
-                            serialized_tool_calls.append(tc.dict())
+                            tc_dict = tc.dict()
                         elif isinstance(tc, dict):
-                            serialized_tool_calls.append(tc)
+                            tc_dict = tc
                         else:
-                            # Fallback for object with attributes
                             function_obj = getattr(tc, "function", None)
-                            serialized_tool_calls.append({
+                            tc_dict = {
                                 "id": getattr(tc, "id", f"call_{hash(str(tc)) % 1000000}"),
                                 "type": "function",
                                 "function": {
                                     "name": getattr(function_obj, "name", "") if function_obj else "",
                                     "arguments": getattr(function_obj, "arguments", "{}") if function_obj else "{}"
                                 }
-                            })
+                            }
+                        serialized_tool_calls.append(tc_dict)
                     except Exception as e:
                         print(f"DEBUG ZAI ERROR serializing tool_call item: {e}", flush=True)
-                
-                if serialized_tool_calls:
-                    msg_dict["tool_calls"] = serialized_tool_calls
-            
+
+                msg_dict = {
+                    "role": "assistant",
+                    "tool_calls": serialized_tool_calls,
+                }
+                if content_str:
+                    msg_dict["content"] = content_str
+            else:
+                # Regular user/assistant messages — only role + content
+                msg_dict = {
+                    "role": role,
+                    "content": content_str,
+                }
+
             api_messages.append(msg_dict)
 
-        return api_messages, None
+        # Z.AI requires the first non-system message to be a user message.
+        # If the first message after system is assistant, wrap it as user.
+        first_non_system_idx = 0
+        for i, msg in enumerate(api_messages):
+            if msg["role"] != "system":
+                first_non_system_idx = i
+                break
+        if first_non_system_idx < len(api_messages):
+            first_msg = api_messages[first_non_system_idx]
+            if first_msg["role"] == "assistant":
+                first_msg["role"] = "user"
+
+        # Build tools list from function specs
+        api_tools = None
+        function_specs = self.get_function_specs()
+        if function_specs:
+            api_tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": spec.name,
+                        "description": spec.description,
+                        "parameters": spec.parameters.model_dump(),
+                    }
+                }
+                for spec in function_specs
+            ]
+
+        return api_messages, api_tools
 
     @record_tool_invoke
     async def invoke(
@@ -121,41 +177,75 @@ class ZaiTool(LLM):
         invoke_context: InvokeContext,
         input_data: Messages,
     ) -> MsgsAGen:
-        messages, _ = self.prepare_api_input(input_data)
-        
+        messages, api_tools = self.prepare_api_input(input_data)
+
         # DEBUG: Print messages being sent to Z.AI
-        print(f"DEBUG ZAI REQUEST MESSAGES: {json.dumps(messages, default=str)}", flush=True)
+        print(f"DEBUG ZAI REQUEST to {self.name} (model={self.model}), {len(messages)} messages", flush=True)
+        for i, msg in enumerate(messages):
+            role = msg.get("role", "?")
+            content_preview = str(msg.get("content", ""))[:80]
+            has_tc = "tool_calls" in msg
+            has_tcid = "tool_call_id" in msg
+            print(f"  msg[{i}] role={role} tc={has_tc} tcid={has_tcid} content={content_preview!r}", flush=True)
+        if api_tools:
+            print(f"DEBUG ZAI TOOLS: {[t['function']['name'] for t in api_tools]}", flush=True)
 
         try:
             from zai import ZaiClient
-            
+
             if not self.api_key:
                 self.api_key = os.getenv("ZAI_API_KEY")
-            
+
             client = ZaiClient(api_key=self.api_key)
-            
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-            )
-            
+
+            # Build kwargs for the API call
+            create_kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "messages": messages,
+            }
+
+            # Pass tools if function specs are available
+            if api_tools:
+                create_kwargs["tools"] = api_tools
+                create_kwargs["tool_choice"] = "auto"
+
+            # Pass chat_params (e.g. response_format, temperature, etc.)
+            for key, value in self.chat_params.items():
+                if key == "response_format" and value is not None:
+                    # Convert Pydantic model class to JSON schema format for Z.AI
+                    if isinstance(value, type) and hasattr(value, "model_json_schema"):
+                        schema = value.model_json_schema()
+                        create_kwargs["response_format"] = {
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": value.__name__,
+                                "schema": schema,
+                            }
+                        }
+                    else:
+                        create_kwargs[key] = value
+                else:
+                    create_kwargs[key] = value
+
+            response = client.chat.completions.create(**create_kwargs)
+
             try:
                 if not response.choices:
                     yield [Message(role="assistant", content="")]
                     return
-                
+
                 choice = response.choices[0]
                 if not choice:
                     yield [Message(role="assistant", content="")]
                     return
-                    
+
                 message = choice.message
                 if not message:
                     yield [Message(role="assistant", content="")]
                     return
-                
+
                 content = message.content or ""
-                
+
                 tool_calls = None
                 if message.tool_calls:
                     tool_calls = []
@@ -167,7 +257,6 @@ class ZaiTool(LLM):
                         elif isinstance(tc, dict):
                             tool_calls.append(tc)
                         else:
-                            # Manually construct dict from object
                             try:
                                 function_obj = getattr(tc, "function", None)
                                 tool_calls.append({
@@ -184,7 +273,8 @@ class ZaiTool(LLM):
                 print(f"DEBUG ZAI ERROR parsing response: {e}", flush=True)
                 yield [Message(role="assistant", content="")]
                 return
-            
+
+            # Strip markdown code fences if present
             content = content.strip()
             if content.startswith("```json"):
                 content = content[7:]
@@ -193,76 +283,50 @@ class ZaiTool(LLM):
             if content.endswith("```"):
                 content = content[:-3]
             content = content.strip()
-            
-            msg_data = {"role": "assistant", "content": content}
-            
+
+            msg_data: Dict[str, Any] = {"role": "assistant", "content": content}
+
             if tool_calls:
                 msg_data["tool_calls"] = tool_calls
-            
-            try:
-                parsed = json.loads(content)
-                if "function" in parsed and parsed["function"]:
-                    func_name = parsed["function"]
-                    func_args = parsed.get("arguments", {})
-                    
-                    if not func_args:
-                        func_args = {k: v for k, v in parsed.items() if k != "function"}
-                    
-                    if isinstance(func_args, dict):
-                        func_args = json.dumps(func_args)
-                    
-                    tool_call_id = f"call_{hash(func_name) % 1000000}"
-                    
-                    msg_data["tool_calls"] = [
-                        {
-                            "id": tool_call_id,
-                            "type": "function",
-                            "function": {
-                                "name": func_name,
-                                "arguments": func_args
-                            }
-                        }
-                    ]
+                # When model makes tool calls, content should be None per OpenAI convention
+                if not content:
                     msg_data["content"] = None
-            except json.JSONDecodeError:
-                pass
-            
-            if not msg_data.get("tool_calls"):
-                func_call_match = re.match(r'^(\w+)\((.*)\)$', content.strip())
-                if func_call_match:
-                    func_name = func_call_match.group(1)
-                    args_str = func_call_match.group(2)
-                    
-                    import ast
-                    try:
-                        args_dict = {}
-                        if args_str:
-                            args_str_formatted = "{" + args_str + "}"
-                            parsed_args = ast.literal_eval(args_str_formatted)
-                            if isinstance(parsed_args, dict):
-                                args_dict = parsed_args
-                            else:
-                                args_dict = {"prompt": args_str}
-                        else:
-                            args_dict = {}
-                        
+                print(f"DEBUG ZAI TOOL_CALLS from response: {[(tc.get('function', {}).get('name', '?')) for tc in tool_calls]}", flush=True)
+
+            # Fallback: if no native tool_calls but content looks like a JSON function call,
+            # parse it into tool_calls format (for models that don't support tools natively)
+            if not msg_data.get("tool_calls") and content:
+                try:
+                    parsed = json.loads(content)
+                    if isinstance(parsed, dict) and "function" in parsed and parsed["function"]:
+                        func_name = parsed["function"]
+                        func_args = parsed.get("arguments", {})
+
+                        if not func_args:
+                            func_args = {k: v for k, v in parsed.items() if k != "function"}
+
+                        if isinstance(func_args, dict):
+                            func_args = json.dumps(func_args)
+
                         tool_call_id = f"call_{hash(func_name) % 1000000}"
+
                         msg_data["tool_calls"] = [
                             {
                                 "id": tool_call_id,
                                 "type": "function",
                                 "function": {
                                     "name": func_name,
-                                    "arguments": json.dumps(args_dict)
+                                    "arguments": func_args
                                 }
                             }
                         ]
                         msg_data["content"] = None
-                    except Exception as e:
-                        print(f"DEBUG ZAI: Failed to parse function call args: {e}", flush=True)
-            
+                        print(f"DEBUG ZAI: Parsed function call from JSON content: {func_name}", flush=True)
+                except json.JSONDecodeError:
+                    pass
+
             yield [Message(**msg_data)]
-                
+
         except asyncio.CancelledError:
             raise
         except Exception as exc:

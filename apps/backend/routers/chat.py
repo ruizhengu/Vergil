@@ -133,10 +133,23 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
                                 if hasattr(message, 'content') and message.content:
                                     parsed_content = None
                                     if isinstance(message.content, str):
-                                        parsed_content = json.loads(message.content)
+                                        raw = message.content.strip()
+                                        # Strip markdown code fences if present
+                                        if raw.startswith("```json"):
+                                            raw = raw[7:]
+                                        elif raw.startswith("```"):
+                                            raw = raw[3:]
+                                        if raw.endswith("```"):
+                                            raw = raw[:-3]
+                                        raw = raw.strip()
+                                        try:
+                                            parsed_content = json.loads(raw)
+                                        except json.JSONDecodeError:
+                                            # Not valid JSON, use as plain string
+                                            parsed_content = raw
                                     else:
-                                        parsed_content = message.content # pure string
-                                    print('parsed_content', parsed_content)
+                                        parsed_content = message.content
+                                    print('parsed_content', str(parsed_content)[:200])
                                     print('parsed_content_type', type(parsed_content))
 
                                     # Handle DeploymentResult from deployment agent (has transaction_data field)

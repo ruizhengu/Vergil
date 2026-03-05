@@ -56,10 +56,7 @@ async def patched_mcp_invoke(self, invoke_context, input_data):
 
 MCPTool.invoke = patched_mcp_invoke
 
-
-
 load_dotenv()
-
 
 def load_prompt(file_path: str) -> str:
     """Load a prompt from a Markdown file."""
