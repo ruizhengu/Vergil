@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import "@rainbow-me/rainbowkit/styles.css";
 import { Providers } from "../components/Providers";
 
 export const metadata: Metadata = {

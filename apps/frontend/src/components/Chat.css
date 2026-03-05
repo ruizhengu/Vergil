@@ -443,25 +443,30 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px;
-  background: linear-gradient(135deg, #8b5cf6, #3b82f6);
-  color: white;
-  border: none;
-  border-radius: 8px;
-  font-size: 14px;
+  padding: 8px 20px;
+  background: rgba(79, 195, 247, 0.15);
+  color: #4fc3f7;
+  border: 1px solid rgba(79, 195, 247, 0.3);
+  border-radius: 9999px;
+  font-size: 12px;
   font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   cursor: pointer;
   transition: all 0.2s ease;
-  margin-right: 12px;
 }
 
 .wallet-connect-button:hover {
+  background: rgba(79, 195, 247, 0.25);
+  border-color: rgba(79, 195, 247, 0.5);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+  box-shadow: 0 4px 12px rgba(79, 195, 247, 0.3);
 }
 
 .wallet-connect-button.wallet-error {
-  background: #ef4444;
+  background: rgba(224, 90, 43, 0.15);
+  border-color: rgba(224, 90, 43, 0.3);
+  color: #e05a2b;
 }
 
 .wallet-connected {
