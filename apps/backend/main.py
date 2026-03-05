@@ -18,6 +18,9 @@ from grafi.common.instrumentations.tracing import TracingOptions
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+# Import the postgres event store to initialize database connection
+import event_store.postgres
+
 load_dotenv()
 
 try:
