@@ -14,7 +14,7 @@ from grafi.topics.expressions.subscription_builder import SubscriptionBuilder
 from grafi.topics.topic_impl.topic import Topic
 from grafi.common.models.function_spec import FunctionSpec
 from grafi.nodes.node import Node
-from grafi.tools.llms.impl.openai_tool import OpenAITool
+from tools.zai_tool import ZaiTool
 from grafi.tools.function_calls.impl.mcp_tool import MCPTool
 from grafi.workflows.impl.event_driven_workflow import EventDrivenWorkflow
 from models.contract_agent_responses import IntentClassificationResponse, ContractGenerationResult
@@ -42,9 +42,9 @@ GENERATION_TOOL_NAMES = {
 class GenerateContractAssistant(Assistant):
     name: str = Field(default="GenerateContractAgent")
     type: str = Field(default="GenerateContractAssistant")
-    api_key: Optional[str] = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
-    model: str = Field(default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o"))
-    oz_mcp_tool: Optional[MCPTool] = Field(default=None)
+    api_key: Optional[str] = Field(default_factory=lambda: os.getenv("ZAI_API_KEY"))
+    model: str = Field(default_factory=lambda: os.getenv("ZAI_MODEL", "glm-4.7"))
+    function_call_tool: Optional[MCPTool] = Field(default=None)
 
     @classmethod
     def builder(cls):
@@ -135,12 +135,11 @@ class GenerateContractAssistant(Assistant):
                 .build()
             )
             .tool(
-                OpenAITool.builder()
+                ZaiTool.builder()
                 .name("intent_classification_llm")
-                .api_key(self.api_key)
+                
                 .model(self.model)
                 .system_message(INTENT_CLASSIFICATION_PROMPT)
-                .chat_params({"response_format": IntentClassificationResponse})
                 .build()
             )
             .publish_to(generic_topic)
@@ -151,9 +150,9 @@ class GenerateContractAssistant(Assistant):
 
         # 2. Generic Action Node - translates params to MCP function calls
         generic_action_openai_tool = (
-            OpenAITool.builder()
+            ZaiTool.builder()
             .name("generic_action_llm")
-            .api_key(self.api_key)
+            
             .model(self.model)
             .system_message(GENERIC_ACTION_PROMPT)
             .build()
@@ -204,9 +203,9 @@ class GenerateContractAssistant(Assistant):
                 .build()
             )
             .tool(
-                OpenAITool.builder()
+                ZaiTool.builder()
                 .name("custom_generation_llm")
-                .api_key(self.api_key)
+                
                 .model(self.model)
                 .system_message(CUSTOM_GENERATION_PROMPT)
                 .build()
@@ -228,12 +227,11 @@ class GenerateContractAssistant(Assistant):
                 .build()
             )
             .tool(
-                OpenAITool.builder()
+                ZaiTool.builder()
                 .name("output_llm")
-                .api_key(self.api_key)
+                
                 .model(self.model)
                 .system_message(GENERATE_OUTPUT_PROMPT)
-                .chat_params({"response_format": ContractGenerationResult})
                 .build()
             )
             .publish_to(agent_output_topic)

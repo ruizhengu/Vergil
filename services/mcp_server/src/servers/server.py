@@ -32,8 +32,12 @@ load_dotenv()
 
 ethereum_sepolia_rpc = os.getenv('ETHEREUM_SEPOLIA_RPC')
 
-solcx.install_solc('0.8.27')
-solcx.set_solc_version('0.8.27')
+try:
+    solcx.install_solc('0.8.27')
+    solcx.set_solc_version('0.8.27')
+except Exception as e:
+    print(f"Warning: Could not install solc: {e}")
+    print("Solc will be installed on first use")
 
 compilation_cache = {}
 

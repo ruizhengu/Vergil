@@ -70,6 +70,8 @@ services:
       - oz_mcp
       - phoenix
     environment:
+      - ZAI_API_KEY=${ZAI_API_KEY}
+      - ZAI_MODEL=${ZAI_MODEL}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL}
       - MCP_SERVER_URL=${MCP_SERVER_URL}

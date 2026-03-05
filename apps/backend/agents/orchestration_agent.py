@@ -17,11 +17,41 @@ from grafi.topics.topic_impl.in_workflow_output_topic import InWorkflowOutputTop
 from grafi.common.models.invoke_context import InvokeContext
 from grafi.common.events.topic_events.publish_to_topic_event import PublishToTopicEvent
 from grafi.nodes.node import Node
-from grafi.tools.llms.impl.openai_tool import OpenAITool
+from tools.zai_tool import ZaiTool
 from grafi.tools.function_calls.impl.mcp_tool import MCPTool
 from grafi.tools.function_calls.impl.agent_calling_tool import AgentCallingTool
 from grafi.workflows.impl.event_driven_workflow import EventDrivenWorkflow
 from models.agent_responses import ReasoningResponse, FinalAgentResponse
+
+# Monkey patch AgentCallingTool.invoke to handle empty input and missing tool calls gracefully
+original_agent_invoke = AgentCallingTool.invoke
+async def patched_agent_invoke(self, invoke_context, input_data):
+    if not input_data:
+        yield []
+        return
+    if input_data[0].tool_calls is None:
+        # Instead of raising ValueError and crashing, return an empty list gracefully
+        yield []
+        return
+    async for msgs in original_agent_invoke(self, invoke_context, input_data):
+        yield msgs
+
+AgentCallingTool.invoke = patched_agent_invoke
+
+# Also patch MCPTool to avoid similar crashes
+original_mcp_invoke = MCPTool.invoke
+async def patched_mcp_invoke(self, invoke_context, input_data):
+    if not input_data:
+        yield []
+        return
+    if input_data[0].tool_calls is None:
+        yield []
+        return
+    async for msgs in original_mcp_invoke(self, invoke_context, input_data):
+        yield msgs
+
+MCPTool.invoke = patched_mcp_invoke
+
 
 
 load_dotenv()
@@ -47,8 +77,8 @@ _verification_retries: Dict[str, int] = {}
 class OrchestrationAssistant(Assistant):
     name: str = Field(default="OrchestrationAgent")
     type: str = Field(default="OrchestrationAssistant")
-    api_key: Optional[str] = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
-    model: str = Field(default_factory=lambda: os.getenv('OPENAI_MODEL', 'gpt-4o'))
+    api_key: Optional[str] = Field(default_factory=lambda: os.getenv("ZAI_API_KEY"))
+    model: str = Field(default_factory=lambda: os.getenv('ZAI_MODEL', 'glm-4.7'))
     function_call_tool: Optional[MCPTool] = Field(default=None)
     generate_contract_assistant: Optional[Any] = Field(default=None)
     deployment_assistant: Optional[Any] = Field(default=None)
@@ -219,12 +249,11 @@ class OrchestrationAssistant(Assistant):
                 .build()
             )
             .tool(
-                OpenAITool.builder()
+                ZaiTool.builder()
                 .name("reasoning_llm")
-                .api_key(self.api_key)
+                
                 .model(self.model)
                 .system_message(REASONING_PROMPT)
-                .chat_params({"response_format": ReasoningResponse})
                 .build()
             )
             .publish_to(reasoning_output_topic)
@@ -233,13 +262,54 @@ class OrchestrationAssistant(Assistant):
             .build()
         )
 
+        # Compile action node - translates reasoning to compile_contract function call
+        compile_action_zai_tool = (
+            ZaiTool.builder()
+            .name("compile_action_llm")
+            
+            .model(self.model)
+            .system_message(COMPILE_ACTION_PROMPT)
+            .build()
+        )
+        compile_specs = self.get_compile_function_specs()
+        compile_action_zai_tool.add_function_specs(compile_specs)
+
+        compile_action_node = (
+            Node.builder()
+            .name("compile_action_node")
+            .type("compile_action_node")
+            .subscribe(
+                SubscriptionBuilder()
+                .subscribed_to(compile_topic)
+                .build()
+            )
+            .tool(compile_action_zai_tool)
+            .publish_to(compile_action_output_topic)
+            .build()
+        )
+
+        # Compile tool node - executes compile_contract MCP call
+        compile_tool_node = (
+            Node.builder()
+            .name("compile_tool_node")
+            .type("compile_tool_node")
+            .subscribe(
+                SubscriptionBuilder()
+                .subscribed_to(compile_action_output_topic)
+                .build()
+            )
+            .tool(self.function_call_tool)
+            .publish_to(compile_tool_output_topic)
+            .build()
+        )
+
         # Contract generation delegation
         contract_delegation_output_topic = Topic(name="contract_delegation_output_topic")
 
-        contract_delegation_openai_tool = (
-            OpenAITool.builder()
+        contract_delegation_zai_tool = (
+            ZaiTool.builder()
             .name("contract_delegation_llm")
-            .api_key(self.api_key)
+            
             .model(self.model)
             .system_message(CONTRACT_GENERATION_DELEGATION_PROMPT)
             .build()
@@ -296,7 +366,7 @@ class OrchestrationAssistant(Assistant):
                 .build()
             )
 
-            contract_delegation_openai_tool.add_function_specs(agent_calling_tool.function_specs)
+            contract_delegation_zai_tool.add_function_specs(agent_calling_tool.function_specs)
 
             contract_delegation_node = (
                 Node.builder()
@@ -309,7 +379,7 @@ class OrchestrationAssistant(Assistant):
                     .subscribed_to(verification_fail_topic)
                     .build()
                 )
-                .tool(contract_delegation_openai_tool)
+                .tool(contract_delegation_zai_tool)
                 .publish_to(contract_delegation_output_topic)
                 .build()
             )
@@ -409,9 +479,9 @@ class OrchestrationAssistant(Assistant):
                 .build()
             )
             .tool(
-                OpenAITool.builder()
+                ZaiTool.builder()
                 .name("deployment_approval_llm")
-                .api_key(self.api_key)
+                
                 .model(self.model)
                 .system_message(DEPLOYMENT_APPROVAL_PROMPT)
                 .build()
