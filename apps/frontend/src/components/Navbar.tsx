@@ -27,7 +27,7 @@ const Navbar = () => {
           }}
         />
         <div
-          className="flex items-center gap-1 px-2 py-2 rounded-full"
+          className="flex items-center gap-1 pl-2 pr-3 py-2.5 rounded-full"
           style={{
             background: 'rgba(5,8,16,0.7)',
             backdropFilter: 'blur(12px) saturate(180%)',
@@ -35,39 +35,38 @@ const Navbar = () => {
             boxShadow: '0 1px 40px rgba(79,195,247,0.08)',
           }}
         >
-        {/* Brand */}
-        <div className="flex items-center gap-2 px-4">
-          <VergilSigil size={24} />
-          <span className="font-cinzel text-xs tracking-[0.15em] text-[hsl(var(--foreground))]">VERGIL</span>
-        </div>
+          {/* Brand */}
+          <div className="flex items-center gap-2 px-4">
+            <VergilSigil size={24} />
+            <span className="font-cinzel text-xs tracking-[0.15em] text-[hsl(var(--foreground))]">VERGIL</span>
+          </div>
 
-        {/* Separator */}
-        <div className="w-px h-5 bg-[hsl(var(--foreground)/0.1)]" />
+          {/* Separator */}
+          <div className="w-px h-5 bg-[hsl(var(--foreground)/0.1)]" />
 
-        {/* Nav links */}
-        <div className="flex items-center gap-1 px-2">
-          {navItems.map((item) => (
-            <button
-              key={item}
-              onClick={() => setActiveSection(item.toLowerCase())}
-              className={`px-4 py-1.5 rounded-full text-xs font-mono tracking-wider transition-all duration-300 ${
-                activeSection === item.toLowerCase()
-                  ? 'bg-[hsl(var(--foreground)/0.1)] text-[hsl(var(--foreground))]'
-                  : 'text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'
-              }`}
-            >
-              {item}
-            </button>
-          ))}
-        </div>
+          {/* Nav links */}
+          <div className="flex items-center gap-1 px-2">
+            {navItems.map((item) => (
+              <button
+                key={item}
+                onClick={() => setActiveSection(item.toLowerCase())}
+                className={`px-4 py-1.5 rounded-full text-xs font-mono tracking-wider transition-all duration-300 ${activeSection === item.toLowerCase()
+                    ? 'bg-[hsl(var(--foreground)/0.1)] text-[hsl(var(--foreground))]'
+                    : 'text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'
+                  }`}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
 
-        {/* Separator */}
-        <div className="w-px h-5 bg-[hsl(var(--foreground)/0.1)]" />
+          {/* Separator */}
+          <div className="w-px h-5 bg-[hsl(var(--foreground)/0.1)]" />
 
-        {/* CTA */}
-        <Button variant="capsule-solid" size="sm" className="ml-1 text-xs tracking-wider animate-btn-pulse">
-          Connect Wallet ▶
-        </Button>
+          {/* CTA */}
+          <Button variant="capsule-solid" size="sm" className="ml-1 text-xs tracking-wider animate-btn-pulse">
+            Connect Wallet ▶
+          </Button>
         </div>
       </div>
     </nav>
