@@ -459,6 +459,8 @@ class OrchestrationAssistant(Assistant):
             .subscribe(
                 SubscriptionBuilder()
                 .subscribed_to(reasoning_output_topic)
+                .or_()
+                .subscribed_to(verification_skip_topic)
                 .build()
             )
             .tool(

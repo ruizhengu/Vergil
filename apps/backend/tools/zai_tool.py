@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from typing import Any
 from typing import Dict
 from typing import List
@@ -75,12 +76,41 @@ class ZaiTool(LLM):
                 "role": m.role,
                 "content": m.content or "",
             }
-            if m.name:
+            # Only include name if it's really needed (e.g. for tool roles)
+            if m.name and m.role == "tool":
                 msg_dict["name"] = m.name
+            
             if m.tool_call_id:
                 msg_dict["tool_call_id"] = m.tool_call_id
+            
             if m.tool_calls:
-                msg_dict["tool_calls"] = m.tool_calls
+                # Ensure tool_calls are serialized to dicts
+                serialized_tool_calls = []
+                for tc in m.tool_calls:
+                    try:
+                        if hasattr(tc, 'model_dump'):
+                            serialized_tool_calls.append(tc.model_dump())
+                        elif hasattr(tc, 'dict'):
+                            serialized_tool_calls.append(tc.dict())
+                        elif isinstance(tc, dict):
+                            serialized_tool_calls.append(tc)
+                        else:
+                            # Fallback for object with attributes
+                            function_obj = getattr(tc, "function", None)
+                            serialized_tool_calls.append({
+                                "id": getattr(tc, "id", f"call_{hash(str(tc)) % 1000000}"),
+                                "type": "function",
+                                "function": {
+                                    "name": getattr(function_obj, "name", "") if function_obj else "",
+                                    "arguments": getattr(function_obj, "arguments", "{}") if function_obj else "{}"
+                                }
+                            })
+                    except Exception as e:
+                        print(f"DEBUG ZAI ERROR serializing tool_call item: {e}", flush=True)
+                
+                if serialized_tool_calls:
+                    msg_dict["tool_calls"] = serialized_tool_calls
+            
             api_messages.append(msg_dict)
 
         return api_messages, None
@@ -92,6 +122,9 @@ class ZaiTool(LLM):
         input_data: Messages,
     ) -> MsgsAGen:
         messages, _ = self.prepare_api_input(input_data)
+        
+        # DEBUG: Print messages being sent to Z.AI
+        print(f"DEBUG ZAI REQUEST MESSAGES: {json.dumps(messages, default=str)}", flush=True)
 
         try:
             from zai import ZaiClient
@@ -134,15 +167,21 @@ class ZaiTool(LLM):
                         elif isinstance(tc, dict):
                             tool_calls.append(tc)
                         else:
-                            tool_calls.append({
-                                "id": getattr(tc, "id", f"call_{hash(str(tc)) % 1000000}"),
-                                "type": "function",
-                                "function": {
-                                    "name": getattr(tc.function, "name", "") if hasattr(tc, "function") else "",
-                                    "arguments": str(getattr(tc.function, "arguments", "{}")) if hasattr(tc, "function") else "{}"
-                                }
-                            })
-            except Exception:
+                            # Manually construct dict from object
+                            try:
+                                function_obj = getattr(tc, "function", None)
+                                tool_calls.append({
+                                    "id": getattr(tc, "id", f"call_{hash(str(tc)) % 1000000}"),
+                                    "type": "function",
+                                    "function": {
+                                        "name": getattr(function_obj, "name", "") if function_obj else "",
+                                        "arguments": getattr(function_obj, "arguments", "{}") if function_obj else "{}"
+                                    }
+                                })
+                            except Exception as e:
+                                print(f"DEBUG ZAI ERROR serializing tool_call: {e}", flush=True)
+            except Exception as e:
+                print(f"DEBUG ZAI ERROR parsing response: {e}", flush=True)
                 yield [Message(role="assistant", content="")]
                 return
             
@@ -187,6 +226,40 @@ class ZaiTool(LLM):
                     msg_data["content"] = None
             except json.JSONDecodeError:
                 pass
+            
+            if not msg_data.get("tool_calls"):
+                func_call_match = re.match(r'^(\w+)\((.*)\)$', content.strip())
+                if func_call_match:
+                    func_name = func_call_match.group(1)
+                    args_str = func_call_match.group(2)
+                    
+                    import ast
+                    try:
+                        args_dict = {}
+                        if args_str:
+                            args_str_formatted = "{" + args_str + "}"
+                            parsed_args = ast.literal_eval(args_str_formatted)
+                            if isinstance(parsed_args, dict):
+                                args_dict = parsed_args
+                            else:
+                                args_dict = {"prompt": args_str}
+                        else:
+                            args_dict = {}
+                        
+                        tool_call_id = f"call_{hash(func_name) % 1000000}"
+                        msg_data["tool_calls"] = [
+                            {
+                                "id": tool_call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": func_name,
+                                    "arguments": json.dumps(args_dict)
+                                }
+                            }
+                        ]
+                        msg_data["content"] = None
+                    except Exception as e:
+                        print(f"DEBUG ZAI: Failed to parse function call args: {e}", flush=True)
             
             yield [Message(**msg_data)]
                 
