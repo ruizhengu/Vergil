@@ -104,7 +104,7 @@ async def create_orchestration_assistant(generate_contract_assistant=None, deplo
 
 async def create_generate_contract_assistant():
     """Create the Generate Contract Assistant with OpenZeppelin MCP tools"""
-    oz_mcp_url = os.getenv('OZ_MCP_SERVER_URL', 'http://localhost:8083/mcp/')
+    oz_mcp_url = os.getenv('OZ_MCP_SERVER_URL', 'http://oz_mcp:8082/mcp/')
     print(f"Connecting to OpenZeppelin MCP server at: {oz_mcp_url}")
 
     oz_config: Dict[str, StreamableHttpConnection] = {
@@ -131,8 +131,10 @@ async def create_generate_contract_assistant():
 
         return assistant
     except Exception as e:
+        import traceback
         print(f"Error building generate contract assistant: {e}")
         print(f"Error type: {type(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
         print("Running in fallback mode - contract generation will not be available")
         return None
 

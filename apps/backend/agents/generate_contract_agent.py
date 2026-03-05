@@ -45,6 +45,7 @@ class GenerateContractAssistant(Assistant):
     api_key: Optional[str] = Field(default_factory=lambda: os.getenv("ZAI_API_KEY"))
     model: str = Field(default_factory=lambda: os.getenv("ZAI_MODEL", "glm-4.7"))
     function_call_tool: Optional[MCPTool] = Field(default=None)
+    oz_mcp_tool: Optional[MCPTool] = Field(default=None)
 
     @classmethod
     def builder(cls):
