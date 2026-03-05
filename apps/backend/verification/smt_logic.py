@@ -77,14 +77,14 @@ def _extract_constraints_with_llm(
     action: FinancialAction,
     contract_facts: Dict[str, Any],
 ) -> Dict[str, Any]:
-    api_key = os.getenv("OPENAI_API_KEY")
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    api_key = os.getenv("ZAI_API_KEY")
+    model = os.getenv("ZAI_MODEL", "zai")
 
     if not api_key:
         result = _default_constraint_bundle(action, contract_facts)
         result["llm_used"] = False
         result["model"] = None
-        result["llm_reason"] = "No OPENAI_API_KEY found"
+        result["llm_reason"] = "No ZAI_API_KEY found"
         return result
 
     prompt = {
@@ -100,7 +100,7 @@ def _extract_constraints_with_llm(
 
     try:
         response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
+            "https://api.z.ai/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",

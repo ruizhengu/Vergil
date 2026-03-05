@@ -13,7 +13,7 @@ from grafi.topics.expressions.subscription_builder import SubscriptionBuilder
 from grafi.topics.topic_impl.topic import Topic
 from grafi.common.models.function_spec import FunctionSpec
 from grafi.nodes.node import Node
-from grafi.tools.llms.impl.openai_tool import OpenAITool
+from tools.zai_tool import ZaiTool
 from grafi.tools.function_calls.impl.mcp_tool import MCPTool
 from grafi.workflows.impl.event_driven_workflow import EventDrivenWorkflow
 from models.deployment_agent_responses import DeploymentIntentResponse, DeploymentResult
@@ -38,8 +38,8 @@ PREPARE_TOOL_NAMES = {"prepare_deployment_transaction"}
 class DeploymentAssistant(Assistant):
     name: str = Field(default="DeploymentAgent")
     type: str = Field(default="DeploymentAssistant")
-    api_key: Optional[str] = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
-    model: str = Field(default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o"))
+    api_key: Optional[str] = Field(default_factory=lambda: os.getenv("ZAI_API_KEY"))
+    model: str = Field(default_factory=lambda: os.getenv("ZAI_MODEL", "zai"))
     function_call_tool: Optional[MCPTool] = Field(default=None)
 
     @classmethod
@@ -130,7 +130,7 @@ class DeploymentAssistant(Assistant):
                 .build()
             )
             .tool(
-                OpenAITool.builder()
+                ZaiTool.builder()
                 .name("deployment_intent_llm")
                 .api_key(self.api_key)
                 .model(self.model)
@@ -144,8 +144,8 @@ class DeploymentAssistant(Assistant):
         )
 
         # 2. Compile Action Node — translates intent to compile_contract function call
-        compile_action_openai_tool = (
-            OpenAITool.builder()
+        compile_action_zai_tool = (
+            ZaiTool.builder()
             .name("deployment_compile_action_llm")
             .api_key(self.api_key)
             .model(self.model)
@@ -153,7 +153,7 @@ class DeploymentAssistant(Assistant):
             .build()
         )
         compile_specs = self.get_compile_function_specs()
-        compile_action_openai_tool.add_function_specs(compile_specs)
+        compile_action_zai_tool.add_function_specs(compile_specs)
 
         compile_action_node = (
             Node.builder()
@@ -164,7 +164,7 @@ class DeploymentAssistant(Assistant):
                 .subscribed_to(compile_deploy_topic)
                 .build()
             )
-            .tool(compile_action_openai_tool)
+            .tool(compile_action_zai_tool)
             .publish_to(compile_tool_output_topic)
             .build()
         )
@@ -185,8 +185,8 @@ class DeploymentAssistant(Assistant):
         )
 
         # 4. Prepare Action Node — translates compilation result to prepare_deployment_transaction call
-        prepare_action_openai_tool = (
-            OpenAITool.builder()
+        prepare_action_zai_tool = (
+            ZaiTool.builder()
             .name("deployment_prepare_action_llm")
             .api_key(self.api_key)
             .model(self.model)
@@ -194,7 +194,7 @@ class DeploymentAssistant(Assistant):
             .build()
         )
         prepare_specs = self.get_prepare_function_specs()
-        prepare_action_openai_tool.add_function_specs(prepare_specs)
+        prepare_action_zai_tool.add_function_specs(prepare_specs)
 
         prepare_action_node = (
             Node.builder()
@@ -207,7 +207,7 @@ class DeploymentAssistant(Assistant):
                 .subscribed_to(compile_result_topic)
                 .build()
             )
-            .tool(prepare_action_openai_tool)
+            .tool(prepare_action_zai_tool)
             .publish_to(prepare_tool_output_topic)
             .build()
         )
@@ -238,7 +238,7 @@ class DeploymentAssistant(Assistant):
                 .build()
             )
             .tool(
-                OpenAITool.builder()
+                ZaiTool.builder()
                 .name("deployment_output_llm")
                 .api_key(self.api_key)
                 .model(self.model)

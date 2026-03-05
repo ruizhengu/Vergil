@@ -66,35 +66,24 @@ class DualEventStore(EventStore):
         return await self.memory.get_topic_events(name, offsets)
 
 
-POSTGRES_USER = os.getenv("POSTGRES_USER", "testing")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "testing")
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
-POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
-POSTGRES_DB = os.getenv("POSTGRES_DB", "vergil_db")
-import os
-
 db_url = os.getenv("DATABASE_URL")
 if not db_url:
-    db_url = "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
+    db_url = (
+        f"postgresql+psycopg2://{os.getenv('POSTGRES_USER', 'postgres')}:"
+        f"{os.getenv('POSTGRES_PASSWORD', 'postgres')}@"
+        f"{os.getenv('POSTGRES_HOST', 'localhost')}:"
+        f"{os.getenv('POSTGRES_PORT', '5432')}/"
+        f"{os.getenv('POSTGRES_DB', 'vergil')}"
+    )
 
-# Fix the postgres:// to postgresql:// for SQLAlchemy if DATABASE_URL comes from railway
-if db_url and db_url.startswith("postgres://"):
+if db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql+psycopg2://", 1)
-# Also add psycopg2 if it's just postgresql://
-elif db_url and db_url.startswith("postgresql://"):
-    db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
-
-postgres_event_store = EventStorePostgres(
-    db_url=db_url
-)
-
-db_url = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 
 try:
     memory_store = EventStoreInMemory()
     pg_store = EventStorePostgres(db_url=db_url)
     dual_store = DualEventStore(memory_store, pg_store)
     container.register_event_store(dual_store)
-    logger.info(f"Dual event store registered (in-memory + PostgreSQL {POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB})")
+    logger.info(f"Dual event store registered (in-memory + PostgreSQL)")
 except Exception as e:
     logger.error(f"Failed to initialize dual event store: {e}. Using in-memory only.")

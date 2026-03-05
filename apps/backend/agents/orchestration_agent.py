@@ -401,8 +401,8 @@ class OrchestrationAssistant(Assistant):
         # Verification nodes — LLM + MCP tool pattern (action → tool)
         verification_action_output_topic = Topic(name="verification_action_output_topic")
 
-        verification_openai_tool = (
-            OpenAITool.builder()
+        verification_zai_tool = (
+            ZaiTool.builder()
             .name("verification_llm")
             .api_key(self.api_key)
             .model(self.model)
@@ -414,7 +414,7 @@ class OrchestrationAssistant(Assistant):
             spec for spec in self.function_call_tool.function_specs
             if spec.name == "verify_contract_code"
         ]
-        verification_openai_tool.add_function_specs(verification_specs)
+        verification_zai_tool.add_function_specs(verification_specs)
 
         verification_action_node = (
             Node.builder()
@@ -425,7 +425,7 @@ class OrchestrationAssistant(Assistant):
                 .subscribed_to(contract_agent_result_topic)
                 .build()
             )
-            .tool(verification_openai_tool)
+            .tool(verification_zai_tool)
             .publish_to(verification_action_output_topic)
             .build()
         )
@@ -456,7 +456,7 @@ class OrchestrationAssistant(Assistant):
                 .build()
             )
             .tool(
-                OpenAITool.builder()
+                ZaiTool.builder()
                 .name("output_llm")
                 .api_key(self.api_key)
                 .model(self.model)
@@ -506,8 +506,8 @@ class OrchestrationAssistant(Assistant):
         )
 
         # Deployment delegation (AgentCallingTool pattern — same as contract generation)
-        deployment_delegation_openai_tool = (
-            OpenAITool.builder()
+        deployment_delegation_zai_tool = (
+            ZaiTool.builder()
             .name("deployment_delegation_llm")
             .api_key(self.api_key)
             .model(self.model)
@@ -552,7 +552,7 @@ class OrchestrationAssistant(Assistant):
                 .build()
             )
 
-            deployment_delegation_openai_tool.add_function_specs(deployment_agent_calling_tool.function_specs)
+            deployment_delegation_zai_tool.add_function_specs(deployment_agent_calling_tool.function_specs)
 
             deployment_delegation_node = (
                 Node.builder()
@@ -563,7 +563,7 @@ class OrchestrationAssistant(Assistant):
                     .subscribed_to(deployment_topic)
                     .build()
                 )
-                .tool(deployment_delegation_openai_tool)
+                .tool(deployment_delegation_zai_tool)
                 .publish_to(deployment_delegation_output_topic)
                 .build()
             )

@@ -149,7 +149,7 @@ class GenerateContractAssistant(Assistant):
         )
 
         # 2. Generic Action Node - translates params to MCP function calls
-        generic_action_openai_tool = (
+        generic_action_zai_tool = (
             ZaiTool.builder()
             .name("generic_action_llm")
             
@@ -161,7 +161,7 @@ class GenerateContractAssistant(Assistant):
         print(f"[GenerateContractAgent] OZ generation specs count: {len(generation_specs)}")
         for spec in generation_specs:
             print(f"[GenerateContractAgent]   - {spec.name}")
-        generic_action_openai_tool.add_function_specs(generation_specs)
+        generic_action_zai_tool.add_function_specs(generation_specs)
 
         generic_action_node = (
             Node.builder()
@@ -172,7 +172,7 @@ class GenerateContractAssistant(Assistant):
                 .subscribed_to(generic_topic)
                 .build()
             )
-            .tool(generic_action_openai_tool)
+            .tool(generic_action_zai_tool)
             .publish_to(generic_tool_output_topic)
             .build()
         )
