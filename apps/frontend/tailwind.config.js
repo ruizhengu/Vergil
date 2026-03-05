@@ -6,7 +6,14 @@ module.exports = {
     "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
   ],
   theme: {
-    extend: {},
+    extend: {
+      fontFamily: {
+        cinzel: ['"Cinzel"', 'serif'],
+        cormorant: ['"Cormorant Garamond"', 'serif'],
+        crimson: ['"Crimson Pro"', 'serif'],
+        mono: ['"JetBrains Mono"', 'monospace'],
+      },
+    },
   },
   plugins: [],
 }
