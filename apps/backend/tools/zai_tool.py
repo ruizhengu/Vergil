@@ -120,8 +120,28 @@ class ZaiTool(LLM):
                 if not message:
                     yield [Message(role="assistant", content="")]
                     return
-                    
+                
                 content = message.content or ""
+                
+                tool_calls = None
+                if message.tool_calls:
+                    tool_calls = []
+                    for tc in message.tool_calls:
+                        if hasattr(tc, 'model_dump'):
+                            tool_calls.append(tc.model_dump())
+                        elif hasattr(tc, 'dict'):
+                            tool_calls.append(tc.dict())
+                        elif isinstance(tc, dict):
+                            tool_calls.append(tc)
+                        else:
+                            tool_calls.append({
+                                "id": getattr(tc, "id", f"call_{hash(str(tc)) % 1000000}"),
+                                "type": "function",
+                                "function": {
+                                    "name": getattr(tc.function, "name", "") if hasattr(tc, "function") else "",
+                                    "arguments": str(getattr(tc.function, "arguments", "{}")) if hasattr(tc, "function") else "{}"
+                                }
+                            })
             except Exception:
                 yield [Message(role="assistant", content="")]
                 return
@@ -136,6 +156,9 @@ class ZaiTool(LLM):
             content = content.strip()
             
             msg_data = {"role": "assistant", "content": content}
+            
+            if tool_calls:
+                msg_data["tool_calls"] = tool_calls
             
             try:
                 parsed = json.loads(content)
