@@ -3,24 +3,24 @@
 const EdgeGlow = () => {
   return (
     <>
-      {/* Left edge */}
+      {/* Left edge - static, no animation to prevent layout shift */}
       <div
-        className="fixed top-0 left-0 h-full pointer-events-none animate-edge-breathe"
+        className="fixed top-0 left-0 h-full pointer-events-none"
         style={{
           width: 80,
           zIndex: 5,
-          background: 'linear-gradient(90deg, rgba(79,195,247,0.5) 0px, rgba(79,195,247,0.15) 2px, transparent 80px)',
+          background: 'linear-gradient(90deg, rgba(79,195,247,0.4) 0px, rgba(79,195,247,0.12) 2px, transparent 80px)',
           maskImage: 'linear-gradient(to bottom, transparent 0%, white 30%, white 70%, transparent 100%)',
           WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, white 30%, white 70%, transparent 100%)',
         }}
       />
-      {/* Right edge */}
+      {/* Right edge - static */}
       <div
-        className="fixed top-0 right-0 h-full pointer-events-none animate-edge-breathe"
+        className="fixed top-0 right-0 h-full pointer-events-none"
         style={{
           width: 80,
           zIndex: 5,
-          background: 'linear-gradient(270deg, rgba(79,195,247,0.5) 0px, rgba(79,195,247,0.15) 2px, transparent 80px)',
+          background: 'linear-gradient(270deg, rgba(79,195,247,0.4) 0px, rgba(79,195,247,0.12) 2px, transparent 80px)',
           maskImage: 'linear-gradient(to bottom, transparent 0%, white 30%, white 70%, transparent 100%)',
           WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, white 30%, white 70%, transparent 100%)',
         }}

@@ -26,6 +26,9 @@ from models.agent_responses import ReasoningResponse, FinalAgentResponse
 from grafi.common.models.function_spec import FunctionSpec
 from typing import List
 
+# Import Anyway tracing decorators
+# from anyway.sdk.decorators import workflow
+
 COMPILE_TOOL_NAMES = {"compile_contract"}
 
 # Monkey patch AgentCallingTool.invoke to handle empty input and missing tool calls gracefully
@@ -336,6 +339,7 @@ class OrchestrationAssistant(Assistant):
         )
 
         if self.generate_contract_assistant is not None:
+            # @workflow(name="generate_contract")
             async def call_generate_agent(invoke_context, message):
                 """Invoke the generate contract assistant and collect results."""
                 import uuid
@@ -539,6 +543,7 @@ class OrchestrationAssistant(Assistant):
         )
 
         if self.deployment_assistant is not None:
+            # @workflow(name="deploy_contract")
             async def call_deployment_agent(invoke_context, message):
                 """Invoke the deployment assistant and collect results."""
                 import uuid as _uuid

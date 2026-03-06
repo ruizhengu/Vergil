@@ -122,3 +122,11 @@ export interface QuickAction {
   icon: string;
   prompt: string;
 }
+
+// Trace event for agent tracing display
+export interface TraceEvent {
+  id: string;
+  timestamp: Date;
+  message: string;
+  status: 'pending' | 'running' | 'completed' | 'error';
+}

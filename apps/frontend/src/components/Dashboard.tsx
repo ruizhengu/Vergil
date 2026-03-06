@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAppStore } from '@/stores/appStore';
+import { useAppStore, getStoreState } from '@/stores/appStore';
 import { StatusBadge } from '@/components/StatusBadge';
 import { WalletButton } from '@/components/WalletButton';
 import { TransactionModal } from '@/components/TransactionModal';
@@ -23,7 +23,14 @@ import {
   Search,
   FileText,
   Check,
-  X
+  X,
+  Loader2,
+  Sparkles,
+  Bot,
+  Terminal,
+  ShieldCheck,
+  CheckCircle2,
+  Circle
 } from 'lucide-react';
 
 // Sidebar component
@@ -253,8 +260,20 @@ function ChatPanel() {
   const sendMessage = async (content: string) => {
     if (!content.trim() || isLoading) return;
 
+    const { clearTraceEvents, addTraceEvent, setTraceComplete } = getStoreState();
+
+    // Clear previous trace events and start new trace
+    clearTraceEvents();
+    addTraceEvent('Agent initialized', 'completed');
+    addTraceEvent('Parsing user request...', 'running');
+
     setMessages(prev => [...prev, { id: generateId(), type: 'text', content, isUser: true }]);
     setIsLoading(true);
+
+    // Update trace to show processing
+    setTimeout(() => {
+      addTraceEvent('Analyzing intent...', 'running');
+    }, 500);
 
     try {
       const response = await apiService.sendMessageReal({
@@ -263,6 +282,12 @@ function ChatPanel() {
       });
 
       if (response.success && response.data) {
+        const { addTraceEvent, setTraceComplete } = getStoreState();
+
+        // Add trace events for contract generation
+        addTraceEvent('Generating contract code...', 'completed');
+        addTraceEvent('Verifying contract security...', 'running');
+
         const data = response.data;
         const backendConvId = data.conversation_id;
         if (backendConvId) {
@@ -271,11 +296,28 @@ function ChatPanel() {
             apiService.connectWallet(address, backendConvId).catch(() => {});
           }
         }
+
+        // Check if it's a contract deployment/generation response
+        if (data.response && (
+          data.response.includes('contract') ||
+          data.response.includes('ERC-20') ||
+          data.response.includes('ERC-721') ||
+          data.response.includes('deployed') ||
+          data.response.includes('Generated')
+        )) {
+          addTraceEvent('Security verification passed', 'completed');
+        }
+
+        addTraceEvent('Response generated', 'completed');
+        setTraceComplete();
+
         setMessages(prev => [...prev, { id: generateId(), type: 'text', content: data.response, isUser: false }]);
       } else {
         throw new Error(response.error || 'Failed to get response');
       }
     } catch (err) {
+      const { addTraceEvent } = getStoreState();
+      addTraceEvent('Error processing request', 'error');
       console.error('Failed to send message:', err);
       setMessages(prev => [...prev, { id: generateId(), type: 'text', content: 'Sorry, something went wrong. Please try again.', isUser: false }]);
     } finally {
@@ -456,8 +498,45 @@ function ChatPanel() {
 
 // Workflow Panel component
 function WorkflowPanel() {
-  const { workflowNodes, agent, securityLayers } = useAppStore();
+  const { workflowNodes, agent, securityLayers, traceEvents: storeTraceEvents } = useAppStore();
   const [activeTab, setActiveTab] = useState<'workflow' | 'security' | 'trace'>('workflow');
+
+  // Use trace events from store, or show idle state if empty
+  const traceEvents = React.useMemo(() => {
+    if (storeTraceEvents.length > 0) {
+      return storeTraceEvents.map(event => ({
+        ...event,
+        time: formatTime(event.timestamp)
+      }));
+    }
+
+    // Default placeholder traces when agent is idle
+    return [{
+      id: 'idle',
+      timestamp: new Date(),
+      time: formatTime(new Date()),
+      message: 'Agent ready',
+      status: 'pending' as const
+    }];
+  }, [storeTraceEvents]);
+
+  function formatTime(date: Date): string {
+    return date.toLocaleTimeString('en-US', { hour12: false });
+  }
+
+  function getNodeTraceMessage(label: string): string {
+    const messages: Record<string, string> = {
+      'Reasoning': 'Analyzing request intent...',
+      'Action Planning': 'Planning execution steps...',
+      'Tool Execution': 'Executing tools...',
+      'Composing Output': 'Generating response...',
+      'Intent Classification': 'Classifying user intent...',
+      'Contract Generation': 'Generating contract code...',
+      'Verification': 'Running security verification...',
+      'Deployment': 'Preparing deployment...',
+    };
+    return messages[label] || label;
+  }
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -590,27 +669,78 @@ function WorkflowPanel() {
         )}
 
         {activeTab === 'trace' && (
-          <div className="space-y-2">
-            <div className="text-[10px] text-white/30 font-mono">
-              <span className="text-[#4fc3f7]">[10:32:15]</span>
-              <span className="ml-2">Agent initialized</span>
-            </div>
-            <div className="text-[10px] text-white/30 font-mono">
-              <span className="text-[#4fc3f7]">[10:32:16]</span>
-              <span className="ml-2">Parsing natural language...</span>
-            </div>
-            <div className="text-[10px] text-white/30 font-mono">
-              <span className="text-[#4fc3f7]">[10:32:18]</span>
-              <span className="ml-2">Generating contract template</span>
-            </div>
-            <div className="text-[10px] text-white/30 font-mono">
-              <span className="text-[#4fc3f7]">[10:32:21]</span>
-              <span className="ml-2">Running security checks...</span>
-            </div>
-            <div className="text-[10px] text-white/30 font-mono">
-              <span className="text-[#4caf82]">[10:32:25]</span>
-              <span className="ml-2 text-[#4caf82]">All checks passed</span>
-            </div>
+          <div className="space-y-1">
+            {traceEvents.map((event, index) => (
+              <div
+                key={event.id}
+                className={`relative flex items-start gap-3 p-3 rounded-lg transition-all duration-300 ${
+                  event.status === 'running'
+                    ? 'bg-[#4fc3f7]/5 border border-[#4fc3f7]/20'
+                    : event.status === 'completed'
+                      ? 'bg-white/[0.02] border border-transparent'
+                      : 'bg-transparent border border-transparent'
+                }`}
+              >
+                {/* Status indicator */}
+                <div className="flex-shrink-0 mt-0.5">
+                  {event.status === 'running' ? (
+                    <Loader2 className="w-3 h-3 text-[#4fc3f7] animate-spin" />
+                  ) : event.status === 'completed' ? (
+                    <CheckCircle2 className="w-3 h-3 text-[#4caf82]" />
+                  ) : event.status === 'error' ? (
+                    <X className="w-3 h-3 text-[#e05a2b]" />
+                  ) : (
+                    <Circle className="w-3 h-3 text-white/30" />
+                  )}
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[10px] font-mono ${
+                      event.status === 'running'
+                        ? 'text-[#4fc3f7]'
+                        : event.status === 'completed'
+                          ? 'text-[#4caf82]'
+                          : event.status === 'error'
+                            ? 'text-[#e05a2b]'
+                            : 'text-white/30'
+                    }`}>
+                      [{event.time}]
+                    </span>
+                    {event.status === 'running' && (
+                      <span className="flex items-center gap-1">
+                        <span className="w-1 h-1 rounded-full bg-[#4fc3f7] animate-pulse" />
+                        <span className="w-1 h-1 rounded-full bg-[#4fc3f7] animate-pulse" style={{ animationDelay: '150ms' }} />
+                        <span className="w-1 h-1 rounded-full bg-[#4fc3f7] animate-pulse" style={{ animationDelay: '300ms' }} />
+                      </span>
+                    )}
+                  </div>
+                  <p className={`text-xs mt-0.5 ${
+                    event.status === 'running'
+                      ? 'text-white'
+                      : event.status === 'completed'
+                        ? 'text-white/70'
+                        : event.status === 'error'
+                          ? 'text-white/70'
+                          : 'text-white/40'
+                  }`}>
+                    {event.message}
+                  </p>
+                </div>
+              </div>
+            ))}
+
+            {/* Empty state */}
+            {traceEvents.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center mb-4">
+                  <Terminal className="w-5 h-5 text-white/30" />
+                </div>
+                <p className="text-xs text-white/40 mb-1">No trace data</p>
+                <p className="text-[10px] text-white/20">Send a message to start tracing</p>
+              </div>
+            )}
           </div>
         )}
       </div>

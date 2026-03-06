@@ -16,13 +16,15 @@ import logging
 import uvicorn
 import sys
 
-from anyway.sdk import Traceloop
+# from anyway.sdk import Traceloop
 
-Traceloop.init(
-    app_name="vergil",
-    api_endpoint="https://trace-dev-collector.anyway.sh/",
-    headers={"Authorization": "sk_test_gGydMdbzv4wpzqpNeUNFbjl62iec6zeR"}
-)
+# Traceloop.init(
+#     app_name="vergil",
+#     api_endpoint="https://trace-dev-collector.anyway.sh/",
+#     headers={"Authorization": "sk_test_gGydMdbzv4wpzqpNeUNFbjl62iec6zeR"},
+#     metrics_exporter=None,  # Disable metrics export
+#     pricing_enabled=False,  # Disable pricing features
+# )
 
 # Register PostgreSQL event store (must happen before any assistant is created)
 import event_store.postgres  # noqa: F401
