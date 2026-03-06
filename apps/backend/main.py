@@ -16,6 +16,14 @@ import logging
 import uvicorn
 import sys
 
+from anyway.sdk import Traceloop
+
+Traceloop.init(
+    app_name="vergil",
+    api_endpoint="https://trace-dev-collector.anyway.sh/",
+    headers={"Authorization": "sk_test_gGydMdbzv4wpzqpNeUNFbjl62iec6zeR"}
+)
+
 # Register PostgreSQL event store (must happen before any assistant is created)
 import event_store.postgres  # noqa: F401
 
@@ -55,12 +63,13 @@ import event_store.postgres
 load_dotenv()
 
 try:
-    tracer = setup_tracing(
-                tracing_options=TracingOptions.PHOENIX,
-                collector_endpoint="http://phoenix",
-                collector_port=4317,
-                project_name="grafi-trace",
-            )
+    # tracer = setup_tracing(
+    #             tracing_options=TracingOptions.PHOENIX,
+    #             collector_endpoint="http://phoenix",
+    #             collector_port=4317,
+    #             project_name="grafi-trace",
+    #         )
+    tracer = None
 except Exception as e:
     print(f"Warning: Could not setup tracing: {e}")
     tracer = None
