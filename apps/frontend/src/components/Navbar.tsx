@@ -4,10 +4,12 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import VergilSigil from '@/components/VergilSigil';
 import { useAppStore } from '@/stores/appStore';
+import { useOnboardingStore } from '@/store/onboardingStore';
 
 const Navbar = () => {
   const [activeSection, setActiveSection] = useState('philosophy');
   const { setCurrentView } = useAppStore();
+  const openOnboarding = useOnboardingStore((state) => state.openOnboarding);
 
   const handleNavClick = (item: string) => {
     const sectionId = item.toLowerCase();
@@ -74,7 +76,7 @@ const Navbar = () => {
           <div className="w-px h-5 bg-[hsl(var(--foreground)/0.1)]" />
 
           {/* CTA */}
-          <Button variant="capsule-solid" size="sm" className="ml-1 text-xs tracking-wider animate-btn-pulse">
+          <Button variant="capsule-solid" size="sm" className="ml-1 text-xs tracking-wider animate-btn-pulse" onClick={openOnboarding}>
             Connect Wallet ▶
           </Button>
         </div>
