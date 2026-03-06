@@ -1,21 +1,21 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import VergilSigil from '@/components/VergilSigil';
 import { useAppStore } from '@/stores/appStore';
 
 const Navbar = () => {
   const [activeSection, setActiveSection] = useState('philosophy');
-  const router = useRouter();
   const { setCurrentView } = useAppStore();
 
   const handleNavClick = (item: string) => {
-    if (item === 'Deploy') {
-      router.push('/chat');
-    } else {
-      setActiveSection(item.toLowerCase());
+    const sectionId = item.toLowerCase();
+    setActiveSection(sectionId);
+
+    const element = document.getElementById(sectionId);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth' });
     }
   };
 
@@ -60,11 +60,9 @@ const Navbar = () => {
               <button
                 key={item}
                 onClick={() => handleNavClick(item)}
-                className={`px-4 py-1.5 rounded-full text-xs font-mono tracking-wider transition-all duration-300 ${item === 'Deploy'
-                    ? 'text-[#4fc3f7] hover:text-[#4fc3f7]/80'
-                    : activeSection === item.toLowerCase()
-                      ? 'bg-[hsl(var(--foreground)/0.1)] text-[hsl(var(--foreground))]'
-                      : 'text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'
+                className={`px-4 py-1.5 rounded-full text-xs font-mono tracking-wider transition-all duration-300 ${activeSection === item.toLowerCase()
+                    ? 'bg-[hsl(var(--foreground)/0.1)] text-[hsl(var(--foreground))]'
+                    : 'text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'
                   }`}
               >
                 {item}

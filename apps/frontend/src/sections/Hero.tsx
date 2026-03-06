@@ -3,10 +3,13 @@
 import { motion } from 'framer-motion';
 import ParticleRing from '@/components/ParticleRing';
 import { Button } from '@/components/ui/button';
+import { useOnboardingStore } from '@/store/onboardingStore';
 
 const HeroSection = () => {
+  const openOnboarding = useOnboardingStore((state) => state.openOnboarding);
+
   return (
-    <section className="relative min-h-screen flex items-center">
+    <section id="philosophy" className="relative min-h-screen flex items-center">
       {/* System status label */}
       <div className="absolute top-28 left-8 flex items-center gap-2 z-10">
         <span className="status-dot status-dot--online" />
@@ -52,7 +55,7 @@ const HeroSection = () => {
             Vergil guides you through.
           </p>
           <div className="flex items-center gap-4 pt-2">
-            <Button variant="capsule-solid" size="lg" className="animate-btn-pulse">
+            <Button variant="capsule-solid" size="lg" className="animate-btn-pulse" onClick={openOnboarding}>
               Connect Wallet
             </Button>
             <Button variant="capsule-outline" size="lg">
