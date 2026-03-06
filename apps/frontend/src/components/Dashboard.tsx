@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '@/stores/appStore';
 import { StatusBadge } from '@/components/StatusBadge';
 import { WalletButton } from '@/components/WalletButton';
@@ -140,7 +140,7 @@ function ChatPanel() {
   const STATIC_FAKE_CHAT_MODE = true;
   const { address, isConnected } = useAccount();
   const [inputValue, setInputValue] = useState('');
-  const fakeStaticResponse = `I have generated an ERC20 token contract named 'meme' with a total supply of 500 tokens. Since you didn't specify a symbol, I've used 'MEME' by default. The contract uses OpenZeppelin's secure implementation and mints the entire supply to your wallet upon deployment. \`\`\`solidity // SPDX-License-Identifier: MIT pragma solidity ^0.8.20; import "@openzeppelin/contracts/token/ERC20/ERC20.sol"; contract MemeToken is ERC20 { constructor() ERC20("meme", "MEME") { _mint(msg.sender, 500 * 10 ** decimals()); } } \`\`\` Generated: MemeToken.sol ⚠️ Warnings: Total supply of 500 tokens will be minted to the deployer address; Ensure you have a compiler version ^0.8.20 available`;
+  const fakeStaticResponse = "I have generated an ERC20 token contract named 'meme' with a total supply of 500 tokens. Since you didn't specify a symbol, I've used 'MEME' by default. The contract uses OpenZeppelin's secure implementation and mints the entire supply to your wallet upon deployment.\n\n```solidity\n// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\n\nimport \"@openzeppelin/contracts/token/ERC20/ERC20.sol\";\n\ncontract MemeToken is ERC20 {\n    constructor() ERC20(\"meme\", \"MEME\") {\n        _mint(msg.sender, 500 * 10 ** decimals());\n    }\n}\n```\n\nGenerated: MemeToken.sol\n\n⚠️ Warnings: Total supply of 500 tokens will be minted to the deployer address; Ensure you have a compiler version ^0.8.20 available";
   const [messages, setMessages] = useState<Array<{ id: string; type: string; content: string; isUser: boolean; code?: string; language?: string }>>(
     STATIC_FAKE_CHAT_MODE
       ? [{ id: 'fake-static-response', type: 'text', content: fakeStaticResponse, isUser: false }]
@@ -159,6 +159,65 @@ function ChatPanel() {
   //   { id: 'audit', label: 'Audit an existing contract', icon: Search, prompt: 'Audit this contract for security vulnerabilities' },
   //   { id: 'explain', label: 'Explain a contract', icon: FileText, prompt: 'Explain what this smart contract does' },
   // ];
+
+  // Parse content to handle code blocks
+  const parseContent = (content: string): React.ReactNode => {
+    if (content.includes('```')) {
+      const parts = content.split('```');
+      const elements: React.ReactNode[] = [];
+
+      for (let i = 0; i < parts.length; i++) {
+        if (i % 2 === 0) {
+          // Regular text part
+          const text = parts[i];
+          if (text.trim()) {
+            elements.push(
+              <p key={`text-${i}`} className="text-sm text-white/80 mb-2">{text.trim()}</p>
+            );
+          }
+        } else {
+          // Code block part
+          let codeContent = parts[i];
+          let language = 'SOLIDITY';
+
+          // Extract language if present
+          const firstNewlineIndex = codeContent.indexOf('\n');
+          if (firstNewlineIndex !== -1 && firstNewlineIndex < 20) {
+            const potentialLang = codeContent.slice(0, firstNewlineIndex).trim().toLowerCase();
+            if (/^[a-zA-Z0-9]+$/.test(potentialLang)) {
+              language = potentialLang.toUpperCase();
+              codeContent = codeContent.slice(firstNewlineIndex + 1);
+            }
+          }
+
+          elements.push(
+            <div key={`code-${i}`} className="rounded-lg overflow-hidden border border-white/[0.08] mb-3">
+              <div className="flex items-center justify-between px-3 py-2 bg-[#0d1117] border-b border-white/[0.06]">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] uppercase tracking-wider text-white/40">{language}</span>
+                </div>
+                <button
+                  className="text-[10px] text-white/40 hover:text-white/60 flex items-center gap-1"
+                  onClick={() => navigator.clipboard.writeText(codeContent.trim())}
+                >
+                  <Copy className="w-3 h-3" />
+                  Copy
+                </button>
+              </div>
+              <pre className="p-3 bg-[#050810] overflow-x-auto">
+                <code className="text-xs font-mono text-white/70">{codeContent.trim()}</code>
+              </pre>
+            </div>
+          );
+        }
+      }
+
+      return <div>{elements}</div>;
+    }
+
+    // No code blocks, return as plain text
+    return <p className="text-sm text-white/80">{content}</p>;
+  };
 
   const generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2);
 
@@ -303,7 +362,7 @@ function ChatPanel() {
                     } px-4 py-3`}
                 >
                   {msg.type === 'text' && (
-                    <p className="text-sm text-white/80">{msg.content}</p>
+                    parseContent(msg.content)
                   )}
 
                   {msg.type === 'code' && (
