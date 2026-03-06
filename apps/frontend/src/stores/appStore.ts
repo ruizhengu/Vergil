@@ -1,3 +1,4 @@
+import { create } from 'zustand';
 import type {
   WalletState,
   AgentState,
@@ -112,275 +113,144 @@ const initialContracts: Contract[] = [
   },
 ];
 
-// Default state for SSR
-const defaultState: AppState = {
-  wallet: { connected: false, address: null, network: 'sepolia' },
-  setWallet: () => {},
-  connectWallet: () => {},
-  disconnectWallet: () => {},
-  agent: { status: 'online', currentNode: null },
-  setAgentStatus: () => {},
-  setAgentError: () => {},
-  deployment: { stage: 'idle', contractName: '', contractType: 'ERC-20', estimatedGas: '0.0025 ETH', txHash: null, contractAddress: null },
-  setDeploymentStage: () => {},
-  setDeploymentData: () => {},
-  resetDeployment: () => {},
-  workflowNodes: [],
-  setNodeStatus: () => {},
-  activateNode: () => {},
-  completeNode: () => {},
-  resetWorkflow: () => {},
-  securityLayers: [],
-  setSecurityStatus: () => {},
-  contracts: [],
-  addContract: () => {},
-  updateContractStatus: () => {},
+export const useAppStore = create<AppState>((set) => ({
+  // Wallet initial state
+  wallet: {
+    connected: false,
+    address: null,
+    network: 'sepolia',
+  },
+  setWallet: (wallet) => set((state) => ({ wallet: { ...state.wallet, ...wallet } })),
+  connectWallet: (address) => set((state) => ({
+    wallet: { ...state.wallet, connected: true, address },
+    ui: { ...state.ui, onboardingOpen: true }
+  })),
+  disconnectWallet: () => set({ wallet: { connected: false, address: null, network: 'sepolia' } }),
+
+  // Agent initial state
+  agent: {
+    status: 'online',
+    currentNode: null,
+  },
+  setAgentStatus: (status, currentNode) => set({ agent: { status, currentNode: currentNode || null } }),
+  setAgentError: (errorMessage) => set({ agent: { status: 'error', currentNode: null, errorMessage } }),
+
+  // Deployment initial state
+  deployment: {
+    stage: 'idle',
+    contractName: '',
+    contractType: 'ERC-20',
+    estimatedGas: '0.0025 ETH',
+    txHash: null,
+    contractAddress: null,
+  },
+  setDeploymentStage: (stage) => set((state) => ({ deployment: { ...state.deployment, stage } })),
+  setDeploymentData: (data) => set((state) => ({ deployment: { ...state.deployment, ...data } })),
+  resetDeployment: () => set({
+    deployment: {
+      stage: 'idle',
+      contractName: '',
+      contractType: 'ERC-20',
+      estimatedGas: '0.0025 ETH',
+      txHash: null,
+      contractAddress: null,
+    }
+  }),
+
+  // Workflow nodes
+  workflowNodes: initialWorkflowNodes,
+  setNodeStatus: (nodeId, status) => set((state) => ({
+    workflowNodes: state.workflowNodes.map((node) =>
+      node.id === nodeId ? { ...node, status } : node
+    ),
+  })),
+  activateNode: (nodeId) => set((state) => ({
+    workflowNodes: state.workflowNodes.map((node) =>
+      node.id === nodeId
+        ? { ...node, status: 'active', startTime: Date.now() }
+        : node
+    ),
+  })),
+  completeNode: (nodeId) => set((state) => ({
+    workflowNodes: state.workflowNodes.map((node) =>
+      node.id === nodeId && node.startTime
+        ? {
+            ...node,
+            status: 'done',
+            duration: Date.now() - node.startTime
+          }
+        : node
+    ),
+  })),
+  resetWorkflow: () => set({ workflowNodes: initialWorkflowNodes }),
+
+  // Security validation layers
+  securityLayers: initialSecurityLayers,
+  setSecurityStatus: (layerId, status) => set((state) => ({
+    securityLayers: state.securityLayers.map((layer) =>
+      layer.id === layerId ? { ...layer, status } : layer
+    ),
+  })),
+
+  // Contract list
+  contracts: initialContracts,
+  addContract: (contract) => set((state) => ({ contracts: [contract, ...state.contracts] })),
+  updateContractStatus: (id, status) => set((state) => ({
+    contracts: state.contracts.map((c) => (c.id === id ? { ...c, status } : c)),
+  })),
+
+  // Chat messages
   messages: [],
-  addMessage: () => {},
-  clearMessages: () => {},
-  ui: { sidebarOpen: true, workflowPanelOpen: true, deploymentModalOpen: false, onboardingOpen: false, onboardingStep: 0, currentView: 'landing' },
-  toggleSidebar: () => {},
-  toggleWorkflowPanel: () => {},
-  openDeploymentModal: () => {},
-  closeDeploymentModal: () => {},
-  openOnboarding: () => {},
-  closeOnboarding: () => {},
-  setOnboardingStep: () => {},
-  setCurrentView: () => {},
+  addMessage: (message) => set((state) => ({
+    messages: [
+      ...state.messages,
+      {
+        ...message,
+        id: Math.random().toString(36).substr(2, 9),
+        timestamp: Date.now(),
+      },
+    ],
+  })),
+  clearMessages: () => set({ messages: [] }),
+
+  // UI state
+  ui: {
+    sidebarOpen: true,
+    workflowPanelOpen: true,
+    deploymentModalOpen: false,
+    onboardingOpen: false,
+    onboardingStep: 0,
+    currentView: 'landing',
+  },
+  toggleSidebar: () => set((state) => ({ ui: { ...state.ui, sidebarOpen: !state.ui.sidebarOpen } })),
+  toggleWorkflowPanel: () => set((state) => ({ ui: { ...state.ui, workflowPanelOpen: !state.ui.workflowPanelOpen } })),
+  openDeploymentModal: () => set((state) => ({ ui: { ...state.ui, deploymentModalOpen: true } })),
+  closeDeploymentModal: () => set((state) => ({ ui: { ...state.ui, deploymentModalOpen: false } })),
+  openOnboarding: () => set((state) => ({ ui: { ...state.ui, onboardingOpen: true, onboardingStep: 0 } })),
+  closeOnboarding: () => set((state) => ({ ui: { ...state.ui, onboardingOpen: false } })),
+  setOnboardingStep: (step) => set((state) => ({ ui: { ...state.ui, onboardingStep: step } })),
+  setCurrentView: (view) => set((state) => ({ ui: { ...state.ui, currentView: view } })),
+
+  // Trace events
   traceEvents: [],
-  addTraceEvent: () => {},
-  clearTraceEvents: () => {},
-  setTraceComplete: () => {},
-};
-
-// Store instance
-let store: AppState | null = null;
-
-function createAppStore(): AppState {
-  if (!store) {
-    store = {
-      // Wallet initial state
-      wallet: {
-        connected: false,
-        address: null,
-        network: 'sepolia',
+  addTraceEvent: (message, status) => set((state) => ({
+    traceEvents: [
+      ...state.traceEvents,
+      {
+        id: Date.now().toString(),
+        timestamp: new Date(),
+        message,
+        status,
       },
-      setWallet: (wallet) => {
-        const currentStore = store as AppState;
-        currentStore.wallet = { ...currentStore.wallet, ...wallet };
-      },
-      connectWallet: (address) => {
-        const currentStore = store as AppState;
-        currentStore.wallet = { connected: true, address, network: 'sepolia' };
-        currentStore.ui.onboardingOpen = true;
-      },
-      disconnectWallet: () => {
-        const currentStore = store as AppState;
-        currentStore.wallet = { connected: false, address: null, network: 'sepolia' };
-      },
-
-      // Agent initial state
-      agent: {
-        status: 'online',
-        currentNode: null,
-      },
-      setAgentStatus: (status, currentNode) => {
-        const currentStore = store as AppState;
-        currentStore.agent = { status, currentNode: currentNode || null };
-      },
-      setAgentError: (errorMessage) => {
-        const currentStore = store as AppState;
-        currentStore.agent = { status: 'error', currentNode: null, errorMessage };
-      },
-
-      // Deployment initial state
-      deployment: {
-        stage: 'idle',
-        contractName: '',
-        contractType: 'ERC-20',
-        estimatedGas: '0.0025 ETH',
-        txHash: null,
-        contractAddress: null,
-      },
-      setDeploymentStage: (stage) => {
-        const currentStore = store as AppState;
-        currentStore.deployment.stage = stage;
-      },
-      setDeploymentData: (data) => {
-        const currentStore = store as AppState;
-        currentStore.deployment = { ...currentStore.deployment, ...data };
-      },
-      resetDeployment: () => {
-        const currentStore = store as AppState;
-        currentStore.deployment = {
-          stage: 'idle',
-          contractName: '',
-          contractType: 'ERC-20',
-          estimatedGas: '0.0025 ETH',
-          txHash: null,
-          contractAddress: null,
-        };
-      },
-
-      // Workflow nodes
-      workflowNodes: initialWorkflowNodes,
-      setNodeStatus: (nodeId, status) => {
-        const currentStore = store as AppState;
-        currentStore.workflowNodes = currentStore.workflowNodes.map((node) =>
-          node.id === nodeId ? { ...node, status } : node
-        );
-      },
-      activateNode: (nodeId) => {
-        const currentStore = store as AppState;
-        currentStore.workflowNodes = currentStore.workflowNodes.map((node) =>
-          node.id === nodeId
-            ? { ...node, status: 'active', startTime: Date.now() }
-            : node
-        );
-      },
-      completeNode: (nodeId) => {
-        const currentStore = store as AppState;
-        currentStore.workflowNodes = currentStore.workflowNodes.map((node) =>
-          node.id === nodeId && node.startTime
-            ? {
-                ...node,
-                status: 'done',
-                duration: Date.now() - node.startTime
-              }
-            : node
-        );
-      },
-      resetWorkflow: () => {
-        const currentStore = store as AppState;
-        currentStore.workflowNodes = initialWorkflowNodes;
-      },
-
-      // Security validation layers
-      securityLayers: initialSecurityLayers,
-      setSecurityStatus: (layerId, status) => {
-        const currentStore = store as AppState;
-        currentStore.securityLayers = currentStore.securityLayers.map((layer) =>
-          layer.id === layerId ? { ...layer, status } : layer
-        );
-      },
-
-      // Contract list
-      contracts: initialContracts,
-      addContract: (contract) => {
-        const currentStore = store as AppState;
-        currentStore.contracts = [contract, ...currentStore.contracts];
-      },
-      updateContractStatus: (id, status) => {
-        const currentStore = store as AppState;
-        currentStore.contracts = currentStore.contracts.map((c) => (c.id === id ? { ...c, status } : c));
-      },
-
-      // Chat messages
-      messages: [],
-      addMessage: (message) => {
-        const currentStore = store as AppState;
-        currentStore.messages = [
-          ...currentStore.messages,
-          {
-            ...message,
-            id: Math.random().toString(36).substr(2, 9),
-            timestamp: Date.now(),
-          },
-        ];
-      },
-      clearMessages: () => {
-        const currentStore = store as AppState;
-        currentStore.messages = [];
-      },
-
-      // UI state
-      ui: {
-        sidebarOpen: true,
-        workflowPanelOpen: true,
-        deploymentModalOpen: false,
-        onboardingOpen: false,
-        onboardingStep: 0,
-        currentView: 'landing',
-      },
-      toggleSidebar: () => {
-        const currentStore = store as AppState;
-        currentStore.ui.sidebarOpen = !currentStore.ui.sidebarOpen;
-      },
-      toggleWorkflowPanel: () => {
-        const currentStore = store as AppState;
-        currentStore.ui.workflowPanelOpen = !currentStore.ui.workflowPanelOpen;
-      },
-      openDeploymentModal: () => {
-        const currentStore = store as AppState;
-        currentStore.ui.deploymentModalOpen = true;
-      },
-      closeDeploymentModal: () => {
-        const currentStore = store as AppState;
-        currentStore.ui.deploymentModalOpen = false;
-      },
-      openOnboarding: () => {
-        const currentStore = store as AppState;
-        currentStore.ui.onboardingOpen = true;
-        currentStore.ui.onboardingStep = 0;
-      },
-      closeOnboarding: () => {
-        const currentStore = store as AppState;
-        currentStore.ui.onboardingOpen = false;
-      },
-      setOnboardingStep: (step) => {
-        const currentStore = store as AppState;
-        currentStore.ui.onboardingStep = step;
-      },
-      setCurrentView: (view) => {
-        const currentStore = store as AppState;
-        currentStore.ui.currentView = view;
-      },
-
-      // Trace events
-      traceEvents: [],
-      addTraceEvent: (message, status) => {
-        const currentStore = store as AppState;
-        currentStore.traceEvents = [
-          ...currentStore.traceEvents,
-          {
-            id: Date.now().toString(),
-            timestamp: new Date(),
-            message,
-            status,
-          },
-        ];
-      },
-      clearTraceEvents: () => {
-        const currentStore = store as AppState;
-        currentStore.traceEvents = [];
-      },
-      setTraceComplete: () => {
-        const currentStore = store as AppState;
-        // Mark all running events as completed
-        currentStore.traceEvents = currentStore.traceEvents.map((event) =>
-          event.status === 'running' ? { ...event, status: 'completed' as const } : event
-        );
-      },
-    };
-  }
-  return store;
-}
-
-// Store instance for direct access
-export let appStore: AppState | null = null;
-
-// React hook for the store
-export const useAppStore = (): AppState => {
-  if (typeof window === 'undefined') {
-    return defaultState;
-  }
-  return createAppStore();
-};
+    ],
+  })),
+  clearTraceEvents: () => set({ traceEvents: [] }),
+  setTraceComplete: () => set((state) => ({
+    traceEvents: state.traceEvents.map((event) =>
+      event.status === 'running' ? { ...event, status: 'completed' as const } : event
+    ),
+  })),
+}));
 
 // Helper to get store state directly (for use outside React components)
-export const getStoreState = (): AppState => {
-  if (!appStore) {
-    appStore = createAppStore();
-  }
-  return appStore;
-};
+export const getStoreState = useAppStore.getState;
