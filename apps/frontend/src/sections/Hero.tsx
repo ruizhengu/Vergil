@@ -8,6 +8,13 @@ import { useOnboardingStore } from '@/store/onboardingStore';
 const HeroSection = () => {
   const openOnboarding = useOnboardingStore((state) => state.openOnboarding);
 
+  const scrollToArchitecture = () => {
+    const element = document.getElementById('architecture');
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
   return (
     <section id="philosophy" className="relative min-h-screen flex items-center">
       {/* System status label */}
@@ -58,7 +65,7 @@ const HeroSection = () => {
             <Button variant="capsule-solid" size="lg" className="animate-btn-pulse" onClick={openOnboarding}>
               Connect Wallet
             </Button>
-            <Button variant="capsule-outline" size="lg">
+            <Button variant="capsule-outline" size="lg" onClick={scrollToArchitecture}>
               View Architecture →
             </Button>
           </div>
