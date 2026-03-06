@@ -2,11 +2,13 @@
 
 import { motion, useInView } from 'framer-motion';
 import { useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 
 const BottomCTA = () => {
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: "-100px" });
+  const router = useRouter();
 
   return (
     <section id="deploy" ref={ref} className="relative py-40 overflow-hidden">
@@ -34,7 +36,12 @@ const BottomCTA = () => {
           </div>
 
           {/* CTA */}
-          <Button variant="capsule-outline" size="lg" className="mx-auto border-[hsl(var(--secondary)/0.3)] text-[hsl(var(--secondary))] hover:border-[hsl(var(--secondary)/0.6)] hover:shadow-[0_0_30px_hsl(42_70%_55%/0.15)]">
+          <Button
+            variant="capsule-outline"
+            size="lg"
+            className="mx-auto border-[hsl(var(--secondary)/0.3)] text-[hsl(var(--secondary))] hover:border-[hsl(var(--secondary)/0.6)] hover:shadow-[0_0_30px_hsl(42_70%_55%/0.15)]"
+            onClick={() => router.push('/chat')}
+          >
             Begin Forging →
           </Button>
         </motion.div>
