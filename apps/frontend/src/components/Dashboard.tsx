@@ -23,7 +23,14 @@ import {
   Search,
   FileText,
   Check,
-  X
+  X,
+  Loader2,
+  Sparkles,
+  Bot,
+  Terminal,
+  ShieldCheck,
+  CheckCircle2,
+  Circle
 } from 'lucide-react';
 
 // Sidebar component
@@ -459,6 +466,84 @@ function WorkflowPanel() {
   const { workflowNodes, agent, securityLayers } = useAppStore();
   const [activeTab, setActiveTab] = useState<'workflow' | 'security' | 'trace'>('workflow');
 
+  // Derive trace events from workflow nodes
+  const traceEvents = React.useMemo(() => {
+    const events: Array<{ id: string; time: string; message: string; status: 'pending' | 'running' | 'completed' | 'error' }> = [];
+    const now = new Date();
+
+    // Add initial agent trace
+    const hasActiveNodes = workflowNodes.some(n => n.status === 'active');
+    const hasCompletedNodes = workflowNodes.some(n => n.status === 'done');
+
+    if (hasActiveNodes || hasCompletedNodes || agent.status !== 'online') {
+      events.push({
+        id: 'init',
+        time: formatTime(new Date(now.getTime() - 30000)),
+        message: 'Agent initialized',
+        status: 'completed'
+      });
+
+      // Add traces based on workflow node status
+      workflowNodes.forEach((node, index) => {
+        const nodeTime = new Date(now.getTime() - (30000 - index * 5000));
+
+        if (node.status === 'active') {
+          events.push({
+            id: node.id,
+            time: formatTime(nodeTime),
+            message: getNodeTraceMessage(node.label),
+            status: 'running'
+          });
+        } else if (node.status === 'done') {
+          events.push({
+            id: node.id,
+            time: formatTime(nodeTime),
+            message: getNodeTraceMessage(node.label),
+            status: 'completed'
+          });
+        }
+      });
+
+      // Add final status
+      if (hasCompletedNodes) {
+        events.push({
+          id: 'complete',
+          time: formatTime(now),
+          message: 'All processes completed',
+          status: 'completed'
+        });
+      }
+    } else {
+      // Default placeholder traces when agent is idle
+      events.push({
+        id: 'idle',
+        time: formatTime(now),
+        message: 'Agent ready',
+        status: 'pending'
+      });
+    }
+
+    return events;
+  }, [workflowNodes, agent.status]);
+
+  function formatTime(date: Date): string {
+    return date.toLocaleTimeString('en-US', { hour12: false });
+  }
+
+  function getNodeTraceMessage(label: string): string {
+    const messages: Record<string, string> = {
+      'Reasoning': 'Analyzing request intent...',
+      'Action Planning': 'Planning execution steps...',
+      'Tool Execution': 'Executing tools...',
+      'Composing Output': 'Generating response...',
+      'Intent Classification': 'Classifying user intent...',
+      'Contract Generation': 'Generating contract code...',
+      'Verification': 'Running security verification...',
+      'Deployment': 'Preparing deployment...',
+    };
+    return messages[label] || label;
+  }
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'done':
@@ -590,27 +675,83 @@ function WorkflowPanel() {
         )}
 
         {activeTab === 'trace' && (
-          <div className="space-y-2">
-            <div className="text-[10px] text-white/30 font-mono">
-              <span className="text-[#4fc3f7]">[10:32:15]</span>
-              <span className="ml-2">Agent initialized</span>
-            </div>
-            <div className="text-[10px] text-white/30 font-mono">
-              <span className="text-[#4fc3f7]">[10:32:16]</span>
-              <span className="ml-2">Parsing natural language...</span>
-            </div>
-            <div className="text-[10px] text-white/30 font-mono">
-              <span className="text-[#4fc3f7]">[10:32:18]</span>
-              <span className="ml-2">Generating contract template</span>
-            </div>
-            <div className="text-[10px] text-white/30 font-mono">
-              <span className="text-[#4fc3f7]">[10:32:21]</span>
-              <span className="ml-2">Running security checks...</span>
-            </div>
-            <div className="text-[10px] text-white/30 font-mono">
-              <span className="text-[#4caf82]">[10:32:25]</span>
-              <span className="ml-2 text-[#4caf82]">All checks passed</span>
-            </div>
+          <div className="space-y-1">
+            {traceEvents.map((event, index) => (
+              <div
+                key={event.id}
+                className={`flex items-start gap-3 p-3 rounded-lg transition-all duration-300 ${
+                  event.status === 'running'
+                    ? 'bg-[#4fc3f7]/5 border border-[#4fc3f7]/20'
+                    : event.status === 'completed'
+                      ? 'bg-white/[0.02] border border-transparent'
+                      : 'bg-transparent border border-transparent'
+                }`}
+              >
+                {/* Status indicator */}
+                <div className="flex-shrink-0 mt-0.5">
+                  {event.status === 'running' ? (
+                    <Loader2 className="w-3 h-3 text-[#4fc3f7] animate-spin" />
+                  ) : event.status === 'completed' ? (
+                    <CheckCircle2 className="w-3 h-3 text-[#4caf82]" />
+                  ) : event.status === 'error' ? (
+                    <X className="w-3 h-3 text-[#e05a2b]" />
+                  ) : (
+                    <Circle className="w-3 h-3 text-white/30" />
+                  )}
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[10px] font-mono ${
+                      event.status === 'running'
+                        ? 'text-[#4fc3f7]'
+                        : event.status === 'completed'
+                          ? 'text-[#4caf82]'
+                          : event.status === 'error'
+                            ? 'text-[#e05a2b]'
+                            : 'text-white/30'
+                    }`}>
+                      [{event.time}]
+                    </span>
+                    {event.status === 'running' && (
+                      <span className="flex items-center gap-1">
+                        <span className="w-1 h-1 rounded-full bg-[#4fc3f7] animate-pulse" />
+                        <span className="w-1 h-1 rounded-full bg-[#4fc3f7] animate-pulse" style={{ animationDelay: '150ms' }} />
+                        <span className="w-1 h-1 rounded-full bg-[#4fc3f7] animate-pulse" style={{ animationDelay: '300ms' }} />
+                      </span>
+                    )}
+                  </div>
+                  <p className={`text-xs mt-0.5 ${
+                    event.status === 'running'
+                      ? 'text-white'
+                      : event.status === 'completed'
+                        ? 'text-white/70'
+                        : event.status === 'error'
+                          ? 'text-white/70'
+                          : 'text-white/40'
+                  }`}>
+                    {event.message}
+                  </p>
+                </div>
+
+                {/* Fade-in animation for new events */}
+                {event.status === 'running' && (
+                  <div className="absolute inset-0 rounded-lg bg-gradient-to-r from-transparent via-[#4fc3f7]/5 to-transparent animate-shimmer" />
+                )}
+              </div>
+            ))}
+
+            {/* Empty state */}
+            {traceEvents.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center mb-4">
+                  <Terminal className="w-5 h-5 text-white/30" />
+                </div>
+                <p className="text-xs text-white/40 mb-1">No trace data</p>
+                <p className="text-[10px] text-white/20">Send a message to start tracing</p>
+              </div>
+            )}
           </div>
         )}
       </div>
