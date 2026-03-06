@@ -7,6 +7,7 @@ import BottomCTA from '@/sections/BottomCTA';
 import CursorGlow from '@/components/CursorGlow';
 import EdgeGlow from '@/components/EdgeGlow';
 import BackgroundEffects from '@/components/BackgroundEffects';
+import { OnboardingModal } from '@/components/OnboardingModal';
 
 const Index = () => {
   return (
@@ -18,6 +19,7 @@ const Index = () => {
       <HeroSection />
       <FeatureCards />
       <BottomCTA />
+      <OnboardingModal />
     </div>
   );
 };

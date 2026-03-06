@@ -96,7 +96,7 @@ const FeatureCards = () => {
   const isInView = useInView(ref, { once: true, margin: "-100px" });
 
   return (
-    <section ref={ref} className="relative py-32 overflow-hidden noise-overlay">
+    <section id="architecture" ref={ref} className="relative py-32 overflow-hidden noise-overlay">
       <div className="container mx-auto px-8 relative z-10">
         {/* Section header */}
         <div className="mb-16 space-y-4">

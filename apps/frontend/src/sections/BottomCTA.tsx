@@ -9,7 +9,7 @@ const BottomCTA = () => {
   const isInView = useInView(ref, { once: true, margin: "-100px" });
 
   return (
-    <section ref={ref} className="relative py-40 overflow-hidden">
+    <section id="deploy" ref={ref} className="relative py-40 overflow-hidden">
       <div className="container mx-auto px-8 text-center relative z-10">
         <motion.div
           initial={{ opacity: 0, y: 30 }}

@@ -1,23 +1,57 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import VergilSigil from '@/components/VergilSigil';
 import { useAppStore } from '@/stores/appStore';
+import { useOnboardingStore } from '@/store/onboardingStore';
 
 const Navbar = () => {
   const [activeSection, setActiveSection] = useState('philosophy');
-  const router = useRouter();
   const { setCurrentView } = useAppStore();
+  const openOnboarding = useOnboardingStore((state) => state.openOnboarding);
 
   const handleNavClick = (item: string) => {
-    if (item === 'Deploy') {
-      router.push('/chat');
-    } else {
-      setActiveSection(item.toLowerCase());
+    const sectionId = item.toLowerCase();
+    setActiveSection(sectionId);
+
+    const element = document.getElementById(sectionId);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth' });
     }
   };
+
+  // Sync active section with scroll position
+  useEffect(() => {
+    const sections = ['philosophy', 'architecture', 'deploy'];
+
+    const observerOptions = {
+      root: null,
+      rootMargin: '-20% 0px -60% 0px',
+      threshold: 0,
+    };
+
+    const observerCallback: IntersectionObserverCallback = (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          setActiveSection(entry.target.id);
+        }
+      });
+    };
+
+    const observer = new IntersectionObserver(observerCallback, observerOptions);
+
+    sections.forEach((sectionId) => {
+      const element = document.getElementById(sectionId);
+      if (element) {
+        observer.observe(element);
+      }
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   const navItems = ['Philosophy', 'Architecture', 'Deploy'];
 
@@ -60,11 +94,9 @@ const Navbar = () => {
               <button
                 key={item}
                 onClick={() => handleNavClick(item)}
-                className={`px-4 py-1.5 rounded-full text-xs font-mono tracking-wider transition-all duration-300 ${item === 'Deploy'
-                    ? 'text-[#4fc3f7] hover:text-[#4fc3f7]/80'
-                    : activeSection === item.toLowerCase()
-                      ? 'bg-[hsl(var(--foreground)/0.1)] text-[hsl(var(--foreground))]'
-                      : 'text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'
+                className={`px-4 py-1.5 rounded-full text-xs font-mono tracking-wider transition-all duration-300 ${activeSection === item.toLowerCase()
+                    ? 'bg-[hsl(var(--foreground)/0.1)] text-[hsl(var(--foreground))]'
+                    : 'text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]'
                   }`}
               >
                 {item}
@@ -76,7 +108,7 @@ const Navbar = () => {
           <div className="w-px h-5 bg-[hsl(var(--foreground)/0.1)]" />
 
           {/* CTA */}
-          <Button variant="capsule-solid" size="sm" className="ml-1 text-xs tracking-wider animate-btn-pulse">
+          <Button variant="capsule-solid" size="sm" className="ml-1 text-xs tracking-wider animate-btn-pulse" onClick={openOnboarding}>
             Connect Wallet ▶
           </Button>
         </div>
