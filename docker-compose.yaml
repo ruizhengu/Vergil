@@ -68,7 +68,7 @@ services:
       - postgres
       - mcp_server
       - oz_mcp
-      # - phoenix
+      - phoenix
     environment:
       - ZAI_API_KEY=${ZAI_API_KEY}
       - ZAI_MODEL=${ZAI_MODEL}
@@ -105,13 +105,13 @@ services:
       - graphite_network
 
   # Phoenix
-  # phoenix:
-  #   image: arizephoenix/phoenix:latest
-  #   ports:
-  #     - "6006:6006"   # Phoenix UI
-  #     - "4317:4317"   # OTLP gRPC for tracing
-  #   networks:
-  #     - graphite_network
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"   # Phoenix UI
+      - "4317:4317"   # OTLP gRPC for tracing
+    networks:
+      - graphite_network
 
 networks:
   graphite_network:
