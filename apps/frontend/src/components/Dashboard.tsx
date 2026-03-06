@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/stores/appStore';
 import { StatusBadge } from '@/components/StatusBadge';
 import { WalletButton } from '@/components/WalletButton';
@@ -27,6 +28,7 @@ import {
 
 // Sidebar component
 function Sidebar() {
+  const router = useRouter();
   const { wallet, setCurrentView, contracts } = useAppStore();
   const [activeNav, setActiveNav] = useState('forge');
 
@@ -46,7 +48,10 @@ function Sidebar() {
   return (
     <aside className="w-60 h-full bg-[#0d1117] border-r border-white/[0.06] flex flex-col">
       {/* Logo */}
-      <div className="p-5 border-b border-white/[0.06]">
+      <button
+        onClick={() => router.push('/')}
+        className="p-5 border-b border-white/[0.06] hover:bg-white/[0.02] transition-colors text-left w-full"
+      >
         <div className="flex items-center gap-3 mb-2">
           <div className="w-8 h-8 rounded-full border border-[#4fc3f7]/30 flex items-center justify-center">
             <span className="text-[#4fc3f7] text-xs font-brand">V</span>
@@ -56,7 +61,7 @@ function Sidebar() {
         <p className="text-[10px] text-white/40 font-body italic">
           smarter with your contract
         </p>
-      </div>
+      </button>
 
       {/* Wallet status */}
       <div className="p-4 border-b border-white/[0.06]">
