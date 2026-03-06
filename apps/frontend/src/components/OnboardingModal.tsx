@@ -1,6 +1,8 @@
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useOnboardingStore } from '@/store/onboardingStore';
 import { X, ChevronRight, Check, Globe, FileCode, MessageSquare } from 'lucide-react';
+import VergilSigil from '@/components/VergilSigil';
 
 export function OnboardingModal() {
   const {
@@ -16,6 +18,7 @@ export function OnboardingModal() {
     setDescription,
   } = useOnboardingStore();
 
+  const router = useRouter();
   const [localNetwork, setLocalNetwork] = useState(selectedNetwork);
 
   if (!isOpen) return null;
@@ -39,9 +42,8 @@ export function OnboardingModal() {
     if (step < 2) {
       setStep(step + 1);
     } else {
-      // Close modal and proceed with the onboarding data
       closeOnboarding();
-      // Here you could trigger the wallet connection or navigate to chat
+      router.push('/chat');
     }
   };
 
@@ -153,10 +155,8 @@ export function OnboardingModal() {
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-white/[0.06]">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full border border-[#4fc3f7]/30 flex items-center justify-center">
-              <span className="text-[#4fc3f7] text-xs font-brand">V</span>
-            </div>
-            <span className="font-brand text-sm tracking-[0.15em] text-white">VERGIL</span>
+            <VergilSigil size={32} />
+            <span className="font-cinzel text-xs tracking-[0.15em] text-[hsl(var(--foreground))]">VERGIL</span>
           </div>
           <button
             onClick={handleSkip}
