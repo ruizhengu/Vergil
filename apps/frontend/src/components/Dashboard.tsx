@@ -137,15 +137,10 @@ function Sidebar() {
 
 // Chat Panel component
 function ChatPanel() {
-  const STATIC_FAKE_CHAT_MODE = true;
+  const STATIC_FAKE_CHAT_MODE = false;
   const { address, isConnected } = useAccount();
   const [inputValue, setInputValue] = useState('');
-  const fakeStaticResponse = "I have generated an ERC20 token contract named 'meme' with a total supply of 500 tokens. Since you didn't specify a symbol, I've used 'MEME' by default. The contract uses OpenZeppelin's secure implementation and mints the entire supply to your wallet upon deployment.\n\n```solidity\n// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\n\nimport \"@openzeppelin/contracts/token/ERC20/ERC20.sol\";\n\ncontract MemeToken is ERC20 {\n    constructor() ERC20(\"meme\", \"MEME\") {\n        _mint(msg.sender, 500 * 10 ** decimals());\n    }\n}\n```\n\nGenerated: MemeToken.sol\n\n⚠️ Warnings: Total supply of 500 tokens will be minted to the deployer address; Ensure you have a compiler version ^0.8.20 available";
-  const [messages, setMessages] = useState<Array<{ id: string; type: string; content: string; isUser: boolean; code?: string; language?: string }>>(
-    STATIC_FAKE_CHAT_MODE
-      ? [{ id: 'fake-static-response', type: 'text', content: fakeStaticResponse, isUser: false }]
-      : []
-  );
+  const [messages, setMessages] = useState<Array<{ id: string; type: string; content: string; isUser: boolean; code?: string; language?: string }>>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [transactionModal, setTransactionModal] = useState<{ isOpen: boolean; approvalRequest: any | null }>({ isOpen: false, approvalRequest: null });
@@ -153,12 +148,12 @@ function ChatPanel() {
 
   const { approvalRequests, hasActiveRequest, startPolling, stopPolling, submitApproval } = useApprovalPolling(3000);
 
-  // const quickActions = [
-  //   { id: 'erc20', label: 'Deploy an ERC-20 token', icon: Coins, prompt: 'Deploy an ERC-20 token named "MyToken" with symbol "MTK" and 1 million supply' },
-  //   { id: 'nft', label: 'Create an NFT collection', icon: Image, prompt: 'Create an ERC-721 NFT collection named "Digital Art" with max supply of 10000' },
-  //   { id: 'audit', label: 'Audit an existing contract', icon: Search, prompt: 'Audit this contract for security vulnerabilities' },
-  //   { id: 'explain', label: 'Explain a contract', icon: FileText, prompt: 'Explain what this smart contract does' },
-  // ];
+  const quickActions = [
+    { id: 'erc20', label: 'Deploy an ERC-20 token', icon: Coins, prompt: 'Deploy an ERC-20 token named "MyToken" with symbol "MTK" and 1 million supply' },
+    { id: 'nft', label: 'Create an NFT collection', icon: Image, prompt: 'Create an ERC-721 NFT collection named "Digital Art" with max supply of 10000' },
+    { id: 'audit', label: 'Audit an existing contract', icon: Search, prompt: 'Audit this contract for security vulnerabilities' },
+    { id: 'explain', label: 'Explain a contract', icon: FileText, prompt: 'Explain what this smart contract does' },
+  ];
 
   // Parse content to handle code blocks
   const parseContent = (content: string): React.ReactNode => {
@@ -226,12 +221,6 @@ function ChatPanel() {
   }, [messages]);
 
   useEffect(() => {
-    if (STATIC_FAKE_CHAT_MODE) {
-      setMessages([{ id: 'fake-static-response', type: 'text', content: fakeStaticResponse, isUser: false }]);
-    }
-  }, [STATIC_FAKE_CHAT_MODE, fakeStaticResponse]);
-
-  useEffect(() => {
     startPolling();
     return () => stopPolling();
   }, [startPolling, stopPolling]);
@@ -257,7 +246,6 @@ function ChatPanel() {
   }, [hasActiveRequest, approvalRequests, transactionModal.isOpen]);
 
   const sendMessage = async (content: string) => {
-    if (STATIC_FAKE_CHAT_MODE) return;
     if (!content.trim() || isLoading) return;
 
     setMessages(prev => [...prev, { id: generateId(), type: 'text', content, isUser: true }]);
@@ -297,9 +285,9 @@ function ChatPanel() {
     sendMessage(content);
   };
 
-  // const handleQuickAction = (prompt: string) => {
-  //   sendMessage(prompt);
-  // };
+  const handleQuickAction = (prompt: string) => {
+    sendMessage(prompt);
+  };
 
   const handleApprovalSubmit = async (approvalId: string, approved: boolean, signedTxHex?: string, rejectionReason?: string) => {
     const success = await submitApproval(approvalId, approved, signedTxHex, rejectionReason);
@@ -327,8 +315,8 @@ function ChatPanel() {
               Your ledger is empty. Begin forging.
             </p>
 
-            {/* Quick actions temporarily disabled for static fake-response testing */}
-            {/* <div className="grid grid-cols-2 gap-3 max-w-md">
+            {/* Quick actions */}
+            <div className="grid grid-cols-2 gap-3 max-w-md">
               {quickActions.map((action) => (
                 <button
                   key={action.id}
@@ -341,7 +329,7 @@ function ChatPanel() {
                   <span className="text-xs text-white/70">{action.label}</span>
                 </button>
               ))}
-            </div> */}
+            </div>
           </div>
         ) : (
           <div className="space-y-6 max-w-3xl mx-auto">
@@ -435,13 +423,13 @@ function ChatPanel() {
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSend()}
               placeholder="Describe your contract..."
-              disabled={isLoading || STATIC_FAKE_CHAT_MODE}
+              disabled={isLoading}
               className="w-full bg-white/[0.03] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-[#4fc3f7]/40 transition-colors disabled:opacity-50"
             />
           </div>
           <button
             onClick={handleSend}
-            disabled={isLoading || STATIC_FAKE_CHAT_MODE}
+            disabled={isLoading}
             className="w-10 h-10 rounded-xl bg-[#4fc3f7]/20 border border-[#4fc3f7]/30 flex items-center justify-center hover:bg-[#4fc3f7]/30 transition-colors disabled:opacity-50"
           >
             <Send className="w-4 h-4 text-[#4fc3f7]" />
