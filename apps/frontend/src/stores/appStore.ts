@@ -9,6 +9,7 @@ import type {
   AgentStatus,
   DeploymentStage,
   NodeStatus,
+  TraceEvent,
 } from '@/types';
 
 interface AppState {
@@ -67,6 +68,12 @@ interface AppState {
   closeOnboarding: () => void;
   setOnboardingStep: (step: number) => void;
   setCurrentView: (view: AppState['ui']['currentView']) => void;
+
+  // Trace events for Trace tab
+  traceEvents: TraceEvent[];
+  addTraceEvent: (message: string, status: TraceEvent['status']) => void;
+  clearTraceEvents: () => void;
+  setTraceComplete: () => void;
 }
 
 const initialWorkflowNodes: WorkflowNode[] = [
@@ -140,6 +147,10 @@ const defaultState: AppState = {
   closeOnboarding: () => {},
   setOnboardingStep: () => {},
   setCurrentView: () => {},
+  traceEvents: [],
+  addTraceEvent: () => {},
+  clearTraceEvents: () => {},
+  setTraceComplete: () => {},
 };
 
 // Store instance
@@ -324,10 +335,39 @@ function createAppStore(): AppState {
         const currentStore = store as AppState;
         currentStore.ui.currentView = view;
       },
+
+      // Trace events
+      traceEvents: [],
+      addTraceEvent: (message, status) => {
+        const currentStore = store as AppState;
+        currentStore.traceEvents = [
+          ...currentStore.traceEvents,
+          {
+            id: Date.now().toString(),
+            timestamp: new Date(),
+            message,
+            status,
+          },
+        ];
+      },
+      clearTraceEvents: () => {
+        const currentStore = store as AppState;
+        currentStore.traceEvents = [];
+      },
+      setTraceComplete: () => {
+        const currentStore = store as AppState;
+        // Mark all running events as completed
+        currentStore.traceEvents = currentStore.traceEvents.map((event) =>
+          event.status === 'running' ? { ...event, status: 'completed' as const } : event
+        );
+      },
     };
   }
   return store;
 }
+
+// Store instance for direct access
+export let appStore: AppState | null = null;
 
 // React hook for the store
 export const useAppStore = (): AppState => {
@@ -335,4 +375,12 @@ export const useAppStore = (): AppState => {
     return defaultState;
   }
   return createAppStore();
+};
+
+// Helper to get store state directly (for use outside React components)
+export const getStoreState = (): AppState => {
+  if (!appStore) {
+    appStore = createAppStore();
+  }
+  return appStore;
 };

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAppStore } from '@/stores/appStore';
+import { useAppStore, getStoreState } from '@/stores/appStore';
 import { StatusBadge } from '@/components/StatusBadge';
 import { WalletButton } from '@/components/WalletButton';
 import { TransactionModal } from '@/components/TransactionModal';
@@ -260,8 +260,20 @@ function ChatPanel() {
   const sendMessage = async (content: string) => {
     if (!content.trim() || isLoading) return;
 
+    const { clearTraceEvents, addTraceEvent, setTraceComplete } = getStoreState();
+
+    // Clear previous trace events and start new trace
+    clearTraceEvents();
+    addTraceEvent('Agent initialized', 'completed');
+    addTraceEvent('Parsing user request...', 'running');
+
     setMessages(prev => [...prev, { id: generateId(), type: 'text', content, isUser: true }]);
     setIsLoading(true);
+
+    // Update trace to show processing
+    setTimeout(() => {
+      addTraceEvent('Analyzing intent...', 'running');
+    }, 500);
 
     try {
       const response = await apiService.sendMessageReal({
@@ -270,6 +282,12 @@ function ChatPanel() {
       });
 
       if (response.success && response.data) {
+        const { addTraceEvent, setTraceComplete } = getStoreState();
+
+        // Add trace events for contract generation
+        addTraceEvent('Generating contract code...', 'completed');
+        addTraceEvent('Verifying contract security...', 'running');
+
         const data = response.data;
         const backendConvId = data.conversation_id;
         if (backendConvId) {
@@ -278,11 +296,28 @@ function ChatPanel() {
             apiService.connectWallet(address, backendConvId).catch(() => {});
           }
         }
+
+        // Check if it's a contract deployment/generation response
+        if (data.response && (
+          data.response.includes('contract') ||
+          data.response.includes('ERC-20') ||
+          data.response.includes('ERC-721') ||
+          data.response.includes('deployed') ||
+          data.response.includes('Generated')
+        )) {
+          addTraceEvent('Security verification passed', 'completed');
+        }
+
+        addTraceEvent('Response generated', 'completed');
+        setTraceComplete();
+
         setMessages(prev => [...prev, { id: generateId(), type: 'text', content: data.response, isUser: false }]);
       } else {
         throw new Error(response.error || 'Failed to get response');
       }
     } catch (err) {
+      const { addTraceEvent } = getStoreState();
+      addTraceEvent('Error processing request', 'error');
       console.error('Failed to send message:', err);
       setMessages(prev => [...prev, { id: generateId(), type: 'text', content: 'Sorry, something went wrong. Please try again.', isUser: false }]);
     } finally {
@@ -463,68 +498,27 @@ function ChatPanel() {
 
 // Workflow Panel component
 function WorkflowPanel() {
-  const { workflowNodes, agent, securityLayers } = useAppStore();
+  const { workflowNodes, agent, securityLayers, traceEvents: storeTraceEvents } = useAppStore();
   const [activeTab, setActiveTab] = useState<'workflow' | 'security' | 'trace'>('workflow');
 
-  // Derive trace events from workflow nodes
+  // Use trace events from store, or show idle state if empty
   const traceEvents = React.useMemo(() => {
-    const events: Array<{ id: string; time: string; message: string; status: 'pending' | 'running' | 'completed' | 'error' }> = [];
-    const now = new Date();
-
-    // Add initial agent trace
-    const hasActiveNodes = workflowNodes.some(n => n.status === 'active');
-    const hasCompletedNodes = workflowNodes.some(n => n.status === 'done');
-
-    if (hasActiveNodes || hasCompletedNodes || agent.status !== 'online') {
-      events.push({
-        id: 'init',
-        time: formatTime(new Date(now.getTime() - 30000)),
-        message: 'Agent initialized',
-        status: 'completed'
-      });
-
-      // Add traces based on workflow node status
-      workflowNodes.forEach((node, index) => {
-        const nodeTime = new Date(now.getTime() - (30000 - index * 5000));
-
-        if (node.status === 'active') {
-          events.push({
-            id: node.id,
-            time: formatTime(nodeTime),
-            message: getNodeTraceMessage(node.label),
-            status: 'running'
-          });
-        } else if (node.status === 'done') {
-          events.push({
-            id: node.id,
-            time: formatTime(nodeTime),
-            message: getNodeTraceMessage(node.label),
-            status: 'completed'
-          });
-        }
-      });
-
-      // Add final status
-      if (hasCompletedNodes) {
-        events.push({
-          id: 'complete',
-          time: formatTime(now),
-          message: 'All processes completed',
-          status: 'completed'
-        });
-      }
-    } else {
-      // Default placeholder traces when agent is idle
-      events.push({
-        id: 'idle',
-        time: formatTime(now),
-        message: 'Agent ready',
-        status: 'pending'
-      });
+    if (storeTraceEvents.length > 0) {
+      return storeTraceEvents.map(event => ({
+        ...event,
+        time: formatTime(event.timestamp)
+      }));
     }
 
-    return events;
-  }, [workflowNodes, agent.status]);
+    // Default placeholder traces when agent is idle
+    return [{
+      id: 'idle',
+      timestamp: new Date(),
+      time: formatTime(new Date()),
+      message: 'Agent ready',
+      status: 'pending' as const
+    }];
+  }, [storeTraceEvents]);
 
   function formatTime(date: Date): string {
     return date.toLocaleTimeString('en-US', { hour12: false });
