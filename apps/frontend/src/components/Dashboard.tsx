@@ -673,7 +673,7 @@ function WorkflowPanel() {
             {traceEvents.map((event, index) => (
               <div
                 key={event.id}
-                className={`flex items-start gap-3 p-3 rounded-lg transition-all duration-300 ${
+                className={`relative flex items-start gap-3 p-3 rounded-lg transition-all duration-300 ${
                   event.status === 'running'
                     ? 'bg-[#4fc3f7]/5 border border-[#4fc3f7]/20'
                     : event.status === 'completed'
@@ -728,11 +728,6 @@ function WorkflowPanel() {
                     {event.message}
                   </p>
                 </div>
-
-                {/* Fade-in animation for new events */}
-                {event.status === 'running' && (
-                  <div className="absolute inset-0 rounded-lg bg-gradient-to-r from-transparent via-[#4fc3f7]/5 to-transparent animate-shimmer" />
-                )}
               </div>
             ))}
 
