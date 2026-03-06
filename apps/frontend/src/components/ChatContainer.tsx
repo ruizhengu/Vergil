@@ -411,6 +411,12 @@ Your smart contract has been successfully deployed and is now live on the blockc
         
         if (response.success && response.data) {
           const backendConversationId = response.data.conversation_id;
+
+          // Re-register wallet with the actual conversation_id so backend can look it up
+          if (backendConversationId && isConnected && address) {
+            apiService.connectWallet(address, backendConversationId).catch(() => {});
+          }
+
           const assistantResponse = response.data.response;
           const structuredResponse = response.data.structured_response;
           const status = response.data.status;

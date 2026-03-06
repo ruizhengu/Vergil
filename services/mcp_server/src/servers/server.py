@@ -7,7 +7,7 @@ import solcx
 import uuid
 import sqlite3
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, List, Optional
 from dotenv import load_dotenv
 from pydantic import Field
 from fastmcp import FastMCP, Client, Context
@@ -63,7 +63,10 @@ async def compile_contract(
             allow_paths="/app/node_modules"
         )
 
-        _, contract_data = next(iter(compiled.items()))
+        # Pick the contract with the most bytecode — this is the main deployable
+        # contract. Abstract contracts and interfaces have empty bytecode and would
+        # be picked incorrectly by next(iter(...)) which is alphabetical order.
+        contract_data = max(compiled.values(), key=lambda c: len(c.get('bin', '') or ''))
         abi = contract_data['abi']
         bytecode = contract_data['bin']
         
@@ -77,7 +80,9 @@ async def compile_contract(
         return {
             "compilation_id": compilation_id,
             "success": True,
-            "message": "Contract compiled successfully. Use get_abi and get_bytecode tools to retrieve data."
+            "abi": abi,
+            "bytecode": bytecode,
+            "message": "Contract compiled successfully."
         }
     except Exception as e:
         return {
@@ -160,8 +165,17 @@ async def prepare_deployment_transaction(
             "message": "Invalid compilation ID",
             "transaction": None
         }
-    
+
     try:
+        # Reject zero/placeholder address immediately — no network calls needed
+        zero_address = "0x0000000000000000000000000000000000000000"
+        if not user_wallet_address or user_wallet_address.lower() == zero_address:
+            return {
+                "success": False,
+                "message": "No wallet address provided. Please connect your wallet first before deploying.",
+                "transaction": None
+            }
+
         # Check if RPC is configured
         if not ethereum_sepolia_rpc:
             return {
@@ -274,10 +288,20 @@ async def prepare_deployment_transaction(
         # Cache the full prepared transaction for later retrieval via REST
         compilation_cache[compilation_id]["prepared_transaction"] = transaction
 
+        # Convert transaction to JSON-safe dict (HexBytes/bytes aren't JSON-serializable)
+        safe_transaction = {}
+        for k, v in transaction.items():
+            if isinstance(v, (bytes, bytearray)):
+                hex_val = v.hex()
+                safe_transaction[k] = hex_val if hex_val.startswith("0x") else "0x" + hex_val
+            else:
+                safe_transaction[k] = v
+
         return {
             "success": True,
-            "transaction": transaction,
-            "constructor_args": constructor_args,
+            "transaction": safe_transaction,
+            "compilation_id": compilation_id,
+            "constructor_args": [str(a) for a in constructor_args],
             "estimated_gas": recommended_gas,
             "gas_price_gwei": gas_price_gwei,
             "chain_id": w3.eth.chain_id,
@@ -487,6 +511,217 @@ async def verify_contract_code(
         },
         "summary": summary,
     }
+
+
+def _convert_arg(value: str, abi_type: str):
+    """Convert string argument to appropriate Python type based on Solidity ABI type."""
+    try:
+        if abi_type == "address":
+            return Web3.to_checksum_address(value)
+        elif abi_type.startswith("uint") or abi_type.startswith("int"):
+            return int(value)
+        elif abi_type == "bool":
+            return value.lower() in ("true", "1", "yes")
+        elif abi_type == "string":
+            return value
+        elif abi_type.startswith("bytes"):
+            if value.startswith("0x"):
+                return bytes.fromhex(value[2:])
+            return value.encode()
+        else:
+            try:
+                return int(value)
+            except ValueError:
+                return value
+    except Exception:
+        return value
+
+
+def _build_converted_args(abi, function_name: str, function_args: list) -> list:
+    """Convert string arguments to proper Python types based on ABI function inputs."""
+    func_abi = next(
+        (f for f in abi if f.get("type") == "function" and f.get("name") == function_name),
+        None
+    )
+    if not func_abi or not function_args:
+        return function_args
+    inputs = func_abi.get("inputs", [])
+    converted = []
+    for i, arg in enumerate(function_args):
+        if i < len(inputs):
+            converted.append(_convert_arg(arg, inputs[i]["type"]))
+        else:
+            converted.append(arg)
+    return converted
+
+
+@mcp.tool(
+    name="call_contract_function",
+    description="Call a read-only (view/pure) contract function using eth_call — no gas, no signing required"
+)
+async def call_contract_function(
+    contract_address: Annotated[str, Field(
+        description="Deployed contract address"
+    )],
+    abi_json: Annotated[str, Field(
+        description="Contract ABI as a JSON string"
+    )],
+    function_name: Annotated[str, Field(
+        description="Name of the function to call"
+    )],
+    function_args: Annotated[Optional[List[str]], Field(
+        description="Function arguments as a list of strings"
+    )] = None,
+) -> dict:
+    """Call a read-only contract function. Returns the result without any transaction."""
+    try:
+        if not ethereum_sepolia_rpc:
+            return {"success": False, "message": "Ethereum RPC URL not configured"}
+
+        w3 = Web3(Web3.HTTPProvider(ethereum_sepolia_rpc))
+        if not w3.is_connected():
+            return {"success": False, "message": "Failed to connect to Ethereum network"}
+
+        abi = json.loads(abi_json)
+        address = w3.to_checksum_address(contract_address)
+        contract = w3.eth.contract(address=address, abi=abi)
+
+        args = function_args or []
+        converted_args = _build_converted_args(abi, function_name, args)
+        print(f"[MCP] call_contract_function: {function_name}({converted_args}) on {address}")
+
+        result = contract.functions[function_name](*converted_args).call()
+
+        # Serialize result
+        if isinstance(result, (bytes, bytearray)):
+            result_str = "0x" + result.hex()
+        elif isinstance(result, (list, tuple)):
+            result_str = str([str(r) for r in result])
+        else:
+            result_str = str(result)
+
+        return {
+            "success": True,
+            "function_name": function_name,
+            "return_value": result_str,
+            "message": f"Called {function_name} successfully"
+        }
+    except Exception as e:
+        print(f"[MCP] call_contract_function error: {e}")
+        return {"success": False, "message": f"Contract call failed: {str(e)}"}
+
+
+@mcp.tool(
+    name="prepare_contract_call_transaction",
+    description="Prepare an unsigned transaction for a state-changing contract function call, for user wallet signing"
+)
+async def prepare_contract_call_transaction(
+    contract_address: Annotated[str, Field(
+        description="Deployed contract address"
+    )],
+    abi_json: Annotated[str, Field(
+        description="Contract ABI as a JSON string"
+    )],
+    function_name: Annotated[str, Field(
+        description="Name of the function to call"
+    )],
+    function_args: Annotated[Optional[List[str]], Field(
+        description="Function arguments as a list of strings"
+    )] = None,
+    user_wallet_address: Annotated[str, Field(
+        description="User's wallet address that will sign the transaction"
+    )] = "",
+    value_wei: Annotated[int, Field(
+        description="ETH value in wei to send with the call (for payable functions)",
+        ge=0
+    )] = 0,
+) -> dict:
+    """Prepare an unsigned transaction for a contract function call. Returns a call_id for retrieval."""
+    try:
+        if not ethereum_sepolia_rpc:
+            return {"success": False, "message": "Ethereum RPC URL not configured"}
+
+        w3 = Web3(Web3.HTTPProvider(ethereum_sepolia_rpc))
+        if not w3.is_connected():
+            return {"success": False, "message": "Failed to connect to Ethereum network"}
+
+        abi = json.loads(abi_json)
+        address = w3.to_checksum_address(contract_address)
+        contract = w3.eth.contract(address=address, abi=abi)
+
+        user_address = w3.to_checksum_address(user_wallet_address) if user_wallet_address else None
+        if not user_address:
+            return {"success": False, "message": "user_wallet_address is required for write calls"}
+
+        args = function_args or []
+        converted_args = _build_converted_args(abi, function_name, args)
+        print(f"[MCP] prepare_contract_call_transaction: {function_name}({converted_args}) on {address}")
+
+        nonce = w3.eth.get_transaction_count(user_address)
+
+        tx_params = {
+            "from": user_address,
+            "nonce": nonce,
+            "value": value_wei,
+            "chainId": w3.eth.chain_id,
+        }
+        transaction = contract.functions[function_name](*converted_args).build_transaction(tx_params)
+
+        # Estimate gas
+        try:
+            estimated_gas = w3.eth.estimate_gas(transaction)
+            transaction["gas"] = int(estimated_gas * 1.2)
+        except Exception as gas_err:
+            print(f"[MCP] Gas estimation failed: {gas_err}")
+            transaction["gas"] = 200000
+
+        # Cache the full transaction for REST retrieval
+        call_id = str(uuid.uuid4())
+        compilation_cache[f"call_{call_id}"] = {"prepared_call": transaction}
+
+        # Build safe metadata (no large data field) for LLM
+        safe_tx_meta = {
+            "gas": transaction.get("gas"),
+            "gasPrice": str(transaction.get("gasPrice", 0)),
+            "chainId": transaction.get("chainId"),
+            "from": transaction.get("from"),
+            "to": transaction.get("to"),
+            "nonce": transaction.get("nonce"),
+            "value": str(transaction.get("value", 0)),
+        }
+
+        return {
+            "success": True,
+            "call_id": call_id,
+            "transaction": safe_tx_meta,
+            "estimated_gas": transaction.get("gas"),
+            "chain_id": w3.eth.chain_id,
+            "user_address": user_address,
+            "message": f"Transaction prepared for {function_name} — ready for wallet signing"
+        }
+    except Exception as e:
+        print(f"[MCP] prepare_contract_call_transaction error: {e}")
+        return {"success": False, "message": f"Transaction preparation failed: {str(e)}"}
+
+
+@mcp.custom_route("/api/call/{call_id}", methods=["GET"])
+async def get_cached_call(request):
+    """Return the full prepared contract call transaction (with encoded data) for a call ID."""
+    call_id = request.path_params["call_id"]
+    cached = compilation_cache.get(f"call_{call_id}", {})
+    tx = cached.get("prepared_call")
+    if not tx:
+        return JSONResponse({"success": False, "error": "Call transaction not found"}, status_code=404)
+    safe_tx = {}
+    for k, v in tx.items():
+        if isinstance(v, (bytes, bytearray)):
+            hex_val = v.hex()
+            safe_tx[k] = hex_val if hex_val.startswith("0x") else "0x" + hex_val
+        elif isinstance(v, (str, int, float, bool, type(None))):
+            safe_tx[k] = v
+        else:
+            safe_tx[k] = str(v)
+    return JSONResponse({"success": True, "transaction": safe_tx})
 
 
 @mcp.custom_route("/api/transaction/{compilation_id}", methods=["GET"])

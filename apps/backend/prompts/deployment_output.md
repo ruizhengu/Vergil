@@ -13,7 +13,7 @@ Respond with DeploymentResult structured format:
   - `compilation_failed` — Compilation failed with errors
   - `failed` — Other failure (MCP tool error, missing data, etc.)
 
-- **transaction_data**: A JSON string containing ONLY the transaction metadata. **DO NOT include the full bytecode/data field** — the backend will fetch the complete transaction separately from the MCP server. Only include these fields:
+- **transaction_data**: A JSON string containing ONLY the transaction metadata (no bytecode):
   - `gas` — gas limit
   - `gasPrice` — gas price in wei
   - `chainId` — chain ID
@@ -36,4 +36,4 @@ Respond with DeploymentResult structured format:
 - If compilation failed → status = "compilation_failed", include error details
 - If other failure → status = "failed", include error details
 - Always include a clear summary
-- **CRITICAL**: Never put the full bytecode or the `data` field from the transaction into `transaction_data`. The bytecode is very large and will be fetched directly from the MCP server by the backend. Only include the metadata fields listed above.
+- **CRITICAL**: Do NOT include bytecode or the `data` field in `transaction_data`. The backend fetches bytecode separately. Only include the metadata fields listed above.

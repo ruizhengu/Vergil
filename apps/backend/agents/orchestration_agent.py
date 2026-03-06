@@ -21,6 +21,7 @@ from tools.zai_tool import ZaiTool
 from grafi.tools.function_calls.impl.mcp_tool import MCPTool
 from grafi.tools.function_calls.impl.agent_calling_tool import AgentCallingTool
 from grafi.workflows.impl.event_driven_workflow import EventDrivenWorkflow
+from grafi.common.models.message import Message
 from models.agent_responses import ReasoningResponse, FinalAgentResponse
 from grafi.common.models.function_spec import FunctionSpec
 from typing import List
@@ -69,6 +70,7 @@ DEPLOYMENT_APPROVAL_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "d
 FINAL_OUTPUT_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "final_output.md"))
 CONTRACT_GENERATION_DELEGATION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "contract_generation_delegation.md"))
 DEPLOYMENT_DELEGATION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "deployment_delegation.md"))
+EXECUTION_DELEGATION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "execution_delegation.md"))
 CONTRACT_VERIFICATION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "contract_verification.md"))
 # COMPILE_ACTION_PROMPT = load_prompt(os.path.join(backend_dir, "prompts", "compile_action.md"))
 
@@ -84,6 +86,7 @@ class OrchestrationAssistant(Assistant):
     function_call_tool: Optional[MCPTool] = Field(default=None)
     generate_contract_assistant: Optional[Any] = Field(default=None)
     deployment_assistant: Optional[Any] = Field(default=None)
+    execution_assistant: Optional[Any] = Field(default=None)
 
     def get_compile_function_specs(self) -> List[FunctionSpec]:
         """Extract compile-related function specs from the MCP tool."""
@@ -139,7 +142,8 @@ class OrchestrationAssistant(Assistant):
             condition=lambda event: any(
                 (parsed := _parse_reasoning(msg)) is not None and
                 not parsed.get('requires_deployment', False) and
-                not parsed.get('requires_contract_generation', False)
+                not parsed.get('requires_contract_generation', False) and
+                not parsed.get('requires_execution', False)
                 for msg in event.data
             )
         )
@@ -165,6 +169,17 @@ class OrchestrationAssistant(Assistant):
         deployment_delegation_output_topic = Topic(name="deployment_delegation_output_topic")
 
         contract_agent_result_topic = Topic(name="contract_agent_result_topic")
+
+        execution_topic = Topic(
+            name="execution_topic",
+            condition=lambda event: any(
+                (parsed := _parse_reasoning(msg)) is not None and
+                parsed.get('requires_execution', False)
+                for msg in event.data
+            )
+        )
+        execution_delegation_output_topic = Topic(name="execution_delegation_output_topic")
+        execution_agent_result_topic = Topic(name="execution_agent_result_topic")
 
         # Split contract agent result into verification required (has code) vs skip (needs input)
         def _has_contract_code(msg):
@@ -282,12 +297,14 @@ class OrchestrationAssistant(Assistant):
                 .subscribed_to(verification_pass_topic)
                 .or_()
                 .subscribed_to(verification_skip_topic)
+                .or_()
+                .subscribed_to(execution_agent_result_topic)
                 .build()
             )
             .tool(
                 ZaiTool.builder()
                 .name("reasoning_llm")
-                
+
                 .model(self.model)
                 .system_message(REASONING_PROMPT)
                 .build()
@@ -295,6 +312,7 @@ class OrchestrationAssistant(Assistant):
             .publish_to(reasoning_output_topic)
             .publish_to(contract_generation_topic)
             .publish_to(deployment_topic)
+            .publish_to(execution_topic)
             .build()
         )
 
@@ -587,6 +605,120 @@ class OrchestrationAssistant(Assistant):
                 .build()
             )
 
+        # Execution delegation (AgentCallingTool pattern — same as contract generation/deployment)
+        execution_delegation_zai_tool = (
+            ZaiTool.builder()
+            .name("execution_delegation_llm")
+            .api_key(self.api_key)
+            .model(self.model)
+            .system_message(EXECUTION_DELEGATION_PROMPT)
+            .build()
+        )
+
+        if self.execution_assistant is not None:
+            async def call_execution_agent(invoke_context, message):
+                """Invoke the execution assistant with deployed contract context injected."""
+                import uuid as _uuid
+                import json as _json
+
+                # Fetch deployed contracts for this conversation and inject into message
+                deployed_context = ""
+                wallet_context = ""
+                try:
+                    from db.session import SessionLocal
+                    from db import repository as db_repo
+                    from routers.wallet import get_wallet_for_conversation
+                    db = SessionLocal()
+                    try:
+                        deployments = db_repo.get_deployments_by_conversation(
+                            db, invoke_context.conversation_id
+                        )
+                        if deployments:
+                            deployed_context = "[Deployed contracts:\n"
+                            for d in deployments:
+                                abi_str = _json.dumps(d["abi"])
+                                deployed_context += (
+                                    f"  - {d['contract_name']} ({d['contract_type'] or 'Contract'}) "
+                                    f"at {d['contract_address']} "
+                                    f"(compilation_id: {d['compilation_id']}, ABI: {abi_str})\n"
+                                )
+                            deployed_context += "]\n"
+                    finally:
+                        db.close()
+                    wallet_addr = get_wallet_for_conversation(invoke_context.conversation_id)
+                    if wallet_addr:
+                        wallet_context = f"[Connected wallet: {wallet_addr}]\n"
+                except Exception as e:
+                    print(f"[OrchestrationAgent] Failed to fetch execution context: {e}")
+
+                original_content = message.content if hasattr(message, 'content') else str(message)
+                augmented_content = f"{wallet_context}{deployed_context}\nUser request: {original_content}"
+                augmented_message = Message(role="user", content=augmented_content)
+
+                print(f"[OrchestrationAgent] Routing to execution agent")
+                child_context = InvokeContext(
+                    conversation_id=invoke_context.conversation_id,
+                    invoke_id=_uuid.uuid4().hex,
+                    assistant_request_id=_uuid.uuid4().hex,
+                )
+                input_event = PublishToTopicEvent(
+                    invoke_context=child_context,
+                    publisher_name="orchestration_agent_execution_delegation",
+                    publisher_type="agent",
+                    topic_name="agent_input_topic",
+                    data=[augmented_message],
+                    consumed_events=[],
+                )
+                result_content = ""
+                async for response_event in self.execution_assistant.invoke(input_event):
+                    if hasattr(response_event, 'data') and response_event.data:
+                        for msg in response_event.data:
+                            if hasattr(msg, 'content') and msg.content:
+                                result_content = msg.content
+                return {"content": result_content}
+
+            execution_agent_calling_tool = (
+                AgentCallingTool.builder()
+                .agent_name("execution_agent")
+                .agent_description(
+                    "Call functions on deployed smart contracts (read-only view functions or state-changing write functions). "
+                    "Pass the user's full execution request."
+                )
+                .argument_description("The user's contract execution request")
+                .agent_call(call_execution_agent)
+                .build()
+            )
+
+            execution_delegation_zai_tool.add_function_specs(execution_agent_calling_tool.function_specs)
+
+            execution_delegation_node = (
+                Node.builder()
+                .name("execution_delegation_node")
+                .type("execution_delegation_node")
+                .subscribe(
+                    SubscriptionBuilder()
+                    .subscribed_to(execution_topic)
+                    .build()
+                )
+                .tool(execution_delegation_zai_tool)
+                .publish_to(execution_delegation_output_topic)
+                .build()
+            )
+
+            execution_agent_execution_node = (
+                Node.builder()
+                .name("execution_agent_execution_node")
+                .type("execution_agent_execution_node")
+                .subscribe(
+                    SubscriptionBuilder()
+                    .subscribed_to(execution_delegation_output_topic)
+                    .build()
+                )
+                .tool(execution_agent_calling_tool)
+                .publish_to(execution_agent_result_topic)
+                .build()
+            )
+
         # --- Build Workflow ---
         workflow_builder = (
             EventDrivenWorkflow.builder()
@@ -613,6 +745,13 @@ class OrchestrationAssistant(Assistant):
                 .node(deployment_agent_execution_node)
             )
 
+        if self.execution_assistant is not None:
+            workflow_builder = (
+                workflow_builder
+                .node(execution_delegation_node)
+                .node(execution_agent_execution_node)
+            )
+
         self.workflow = workflow_builder.build()
 
         return self
@@ -637,4 +776,8 @@ class OrchestrationAssistantBuilder(AssistantBaseBuilder):
 
     def deployment_assistant(self, deployment_assistant):
         self.kwargs["deployment_assistant"] = deployment_assistant
+        return self
+
+    def execution_assistant(self, execution_assistant):
+        self.kwargs["execution_assistant"] = execution_assistant
         return self

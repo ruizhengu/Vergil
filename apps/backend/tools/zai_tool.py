@@ -325,6 +325,28 @@ class ZaiTool(LLM):
                 except json.JSONDecodeError:
                     pass
 
+            # Fallback: GLM sometimes responds with XML-style key/value format when
+            # response_format (json_schema) is specified.
+            # e.g. "format_to_deployment_result <arg_key>status</arg_key> <arg_value>ready_for_signing</arg_value>..."
+            # Parse these into a plain JSON string so downstream code can detect them.
+            if not msg_data.get("tool_calls") and content:
+                import re as _re
+                keys = _re.findall(r'<arg_key>(.*?)</arg_key>', content, _re.DOTALL)
+                values = _re.findall(r'<arg_value>(.*?)</arg_value>', content, _re.DOTALL)
+                if keys and len(keys) == len(values):
+                    args_dict: Dict[str, Any] = {}
+                    for k, v in zip(keys, values):
+                        k = k.strip()
+                        v = v.strip()
+                        # Try to coerce numeric-looking or JSON values
+                        try:
+                            args_dict[k] = json.loads(v) if v not in ("null", "") else None
+                        except json.JSONDecodeError:
+                            args_dict[k] = v if v != "null" else None
+                    reconstructed = json.dumps(args_dict)
+                    msg_data["content"] = reconstructed
+                    print(f"DEBUG ZAI: Reconstructed XML-style response_format output as JSON: {reconstructed[:120]}", flush=True)
+
             yield [Message(**msg_data)]
 
         except asyncio.CancelledError:

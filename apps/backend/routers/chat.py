@@ -18,42 +18,125 @@ from grafi.common.events.topic_events.publish_to_topic_event import PublishToTop
 from memory.context import get_conversation_context
 from models.agent_responses import FinalAgentResponse, DeploymentApprovalRequest
 from models.deployment_agent_responses import DeploymentResult
+from models.execution_agent_responses import ExecutionResult as ExecutionAgentResult
 from db.session import SessionLocal
 from db import repository as db_repo
 
 from routers.approval import approval_requests
+from routers.wallet import get_wallet_for_conversation
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 # Base URL for MCP server REST endpoints (strip /mcp/ suffix)
 MCP_SERVER_BASE = os.getenv("MCP_SERVER_URL", "http://localhost:8081/mcp/").replace("/mcp/", "").rstrip("/")
 
+# In-memory cache for prepared transactions extracted from MCP tool results.
+# Key: compilation_id, Value: full prepared transaction dict with bytecode
+prepared_tx_cache: dict = {}
+
 
 async def _fetch_mcp_transaction(compilation_id: str) -> Optional[dict]:
-    """Fetch the full prepared transaction (with bytecode) from the MCP server."""
+    """Fetch the full prepared transaction (with bytecode) from the MCP server.
+    Retries up to 3 times with increasing timeout to handle slow MCP responses.
+    """
+    for attempt in range(3):
+        try:
+            timeout = 10 + (attempt * 10)  # 10s, 20s, 30s
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                url = f"{MCP_SERVER_BASE}/api/transaction/{compilation_id}"
+                print(f"[ChatAPI] Fetching full tx from MCP (attempt {attempt+1}): {url}", flush=True)
+                resp = await client.get(url)
+                print(f"[ChatAPI] MCP response status: {resp.status_code}", flush=True)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("success"):
+                        tx = data["transaction"]
+                        if tx.get("data") and len(str(tx["data"])) > 10:
+                            print(f"[ChatAPI] Got full tx with bytecode (data len: {len(str(tx['data']))})", flush=True)
+                            return tx
+                        else:
+                            print(f"[ChatAPI] WARNING: MCP returned tx but 'data' field is empty/missing!", flush=True)
+                    else:
+                        print(f"[ChatAPI] MCP returned success=false: {data.get('error')}", flush=True)
+                elif resp.status_code == 404:
+                    print(f"[ChatAPI] Transaction not found in MCP cache for {compilation_id}", flush=True)
+                    break
+                else:
+                    print(f"[ChatAPI] Unexpected MCP status: {resp.status_code} - {resp.text[:200]}", flush=True)
+        except Exception as e:
+            print(f"[ChatAPI] Failed to fetch full transaction from MCP (attempt {attempt+1}): {e}", flush=True)
+    return None
+
+
+async def _get_tx_data_from_events(conversation_id: str, compilation_id: str) -> Optional[str]:
+    """Query the Grafi event store for the prepare_deployment_transaction result.
+    Returns transaction.data (bytecode + ABI-encoded constructor args).
+    Sub-agents use their own conversation_id, so we search all recent events.
+    """
+    import re
+    try:
+        from db.session import engine as _engine
+        import sqlalchemy as sa
+        with _engine.connect() as conn:
+            result = conn.execute(sa.text(
+                "SELECT event_data FROM events "
+                "WHERE event_data::text LIKE :comp_pat "
+                "AND event_data::text LIKE '%\"transaction\"%' "
+                "ORDER BY id DESC LIMIT 20"
+            ), {"comp_pat": f"%{compilation_id}%"})
+            for row in result:
+                raw = json.dumps(row[0])
+                for content_str in re.findall(r'"content"\s*:\s*"((?:[^"\\]|\\.)*)"', raw):
+                    try:
+                        unescaped = bytes(content_str, "utf-8").decode("unicode_escape")
+                        obj = json.loads(unescaped)
+                        if (isinstance(obj, dict) and obj.get("compilation_id") == compilation_id
+                                and isinstance(obj.get("transaction"), dict)):
+                            tx_data = obj["transaction"].get("data")
+                            if tx_data and len(str(tx_data)) > 10:
+                                print(f"[ChatAPI] Found prepared tx data from event store (len: {len(str(tx_data))})", flush=True)
+                                return tx_data if str(tx_data).startswith("0x") else "0x" + str(tx_data)
+                    except Exception:
+                        pass
+    except Exception as e:
+        print(f"[ChatAPI] Event store tx query failed: {e}", flush=True)
+    return None
+
+
+async def _fetch_mcp_call(call_id: str) -> Optional[dict]:
+    """Fetch the full prepared contract call transaction from the MCP server by call_id."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{MCP_SERVER_BASE}/api/transaction/{compilation_id}")
+            resp = await client.get(f"{MCP_SERVER_BASE}/api/call/{call_id}")
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("success"):
                     return data["transaction"]
     except Exception as e:
-        print(f"[ChatAPI] Failed to fetch full transaction from MCP: {e}")
+        print(f"[ChatAPI] Failed to fetch call transaction from MCP: {e}")
     return None
 
 
 async def _fetch_mcp_compilation(compilation_id: str) -> Optional[dict]:
     """Fetch compilation data (abi, bytecode, source_code) from the MCP server."""
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{MCP_SERVER_BASE}/api/compilation/{compilation_id}")
+        url = f"{MCP_SERVER_BASE}/api/compilation/{compilation_id}"
+        print(f"[ChatAPI] Fetching compilation from: {url}", flush=True)
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url)
+            print(f"[ChatAPI] Compilation fetch status: {resp.status_code}", flush=True)
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("success"):
+                    bc = data.get("bytecode")
+                    print(f"[ChatAPI] Compilation data: bytecode={'present, len=' + str(len(bc)) if bc else 'MISSING'}, abi={'present' if data.get('abi') else 'MISSING'}", flush=True)
                     return data
+                else:
+                    print(f"[ChatAPI] Compilation fetch returned success=false", flush=True)
+            else:
+                print(f"[ChatAPI] Compilation fetch failed: {resp.status_code} - {resp.text[:200]}", flush=True)
     except Exception as e:
-        print(f"[ChatAPI] Failed to fetch compilation from MCP: {e}")
+        print(f"[ChatAPI] Failed to fetch compilation from MCP: {e}", flush=True)
     return None
 
 class ChatRequest(BaseModel):
@@ -93,7 +176,15 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
                 # get context
                 conversation_history = await get_conversation_context(conversation_id)
 
-                input_data = conversation_history + [Message(role="user", content=chat_request.message)]
+                # Inject connected wallet address so agents can use it for deployment
+                # Fall back to "default" session if conversation-specific wallet not set
+                wallet_address = get_wallet_for_conversation(conversation_id) or get_wallet_for_conversation("default")
+                user_message = chat_request.message
+                if wallet_address:
+                    user_message = f"[Connected wallet: {wallet_address}]\n\n{chat_request.message}"
+                    print(f"[ChatAPI] Injecting wallet {wallet_address} into message", flush=True)
+
+                input_data = conversation_history + [Message(role="user", content=user_message)]
 
                 print("input_data", input_data)
 
@@ -152,8 +243,86 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
                                     print('parsed_content', str(parsed_content)[:200])
                                     print('parsed_content_type', type(parsed_content))
 
+                                    # Unwrap AgentCallingTool result: {"content": "<JSON>"} → parse inner
+                                    if (isinstance(parsed_content, dict) and
+                                            set(parsed_content.keys()) <= {"content"} and
+                                            isinstance(parsed_content.get("content"), str)):
+                                        try:
+                                            inner = json.loads(parsed_content["content"])
+                                            if isinstance(inner, dict):
+                                                print(f"[ChatAPI] Unwrapped AgentCallingTool result, inner keys: {list(inner.keys())}", flush=True)
+                                                parsed_content = inner
+                                        except (json.JSONDecodeError, TypeError):
+                                            pass
+
+                                    # Handle ExecutionResult from execution agent
+                                    if (
+                                        isinstance(parsed_content, dict) and
+                                        'function_type' in parsed_content and
+                                        'function_name' in parsed_content and
+                                        parsed_content.get('status') in ('success', 'pending_signature', 'failed')
+                                    ):
+                                        print(f"[ChatAPI] Processing ExecutionResult with status: {parsed_content['status']}")
+                                        execution_result = ExecutionAgentResult(**parsed_content)
+
+                                        if execution_result.status == "success":
+                                            full_response = execution_result.summary
+                                            if execution_result.return_value:
+                                                full_response += f"\n\n**Result:** {execution_result.return_value}"
+                                            final_status = "completed"
+                                            structured_response = execution_result.model_dump()
+
+                                        elif execution_result.status == "pending_signature":
+                                            # Parse tx metadata from LLM output
+                                            tx_metadata = {}
+                                            call_id = None
+                                            if execution_result.transaction_data:
+                                                try:
+                                                    tx_metadata = json.loads(execution_result.transaction_data)
+                                                    call_id = tx_metadata.get("call_id")
+                                                except (json.JSONDecodeError, TypeError):
+                                                    tx_metadata = {}
+
+                                            # Fetch the full transaction (with encoded data) from MCP server
+                                            full_tx = None
+                                            if call_id:
+                                                full_tx = await _fetch_mcp_call(call_id)
+                                            tx_data = full_tx if full_tx else tx_metadata
+
+                                            full_response = execution_result.summary
+                                            full_response += "\n\nPlease approve the transaction in your connected wallet."
+
+                                            final_status = "pending_signature"
+                                            structured_response = execution_result.model_dump()
+
+                                            # Create approval request for frontend polling
+                                            approval_id = f"exec_{uuid.uuid4().hex}"
+                                            approval_requests[approval_id] = {
+                                                "approval_id": approval_id,
+                                                "transaction_data": tx_data,
+                                                "timestamp": datetime.now(),
+                                                "contract_type": "Contract Function Call",
+                                                "deployment_details": {
+                                                    "user_address": tx_metadata.get("from"),
+                                                    "chain_id": tx_metadata.get("chainId", 11155111),
+                                                },
+                                                "estimated_gas": tx_metadata.get("gas"),
+                                                "message": execution_result.summary,
+                                                "processed": False,
+                                                "conversation_id": conversation_id,
+                                                "invoke_id": invoke_context.invoke_id,
+                                                "assistant_request_id": invoke_context.assistant_request_id,
+                                                "paused_event_id": getattr(response_event, 'event_id', None),
+                                            }
+                                            print(f"[ChatAPI] Created execution approval request: {approval_id}")
+
+                                        else:
+                                            full_response = f"Execution failed: {execution_result.error or execution_result.summary}"
+                                            final_status = "failed"
+                                            structured_response = execution_result.model_dump()
+
                                     # Handle DeploymentResult from deployment agent (has transaction_data field)
-                                    if isinstance(parsed_content, dict) and 'transaction_data' in parsed_content and parsed_content.get('status') in ('ready_for_signing', 'compilation_failed', 'failed'):
+                                    elif isinstance(parsed_content, dict) and 'transaction_data' in parsed_content and parsed_content.get('status') in ('ready_for_signing', 'compilation_failed', 'failed'):
                                         print(f"Debug: Processing DeploymentResult with status: {parsed_content['status']}")
                                         deployment_result = DeploymentResult(**parsed_content)
                                         deployment_request = True
@@ -167,32 +336,41 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
                                                 except (json.JSONDecodeError, TypeError):
                                                     tx_metadata = {}
 
-                                            # Fetch the FULL transaction (with bytecode) from MCP server
-                                            full_tx = None
-                                            if deployment_result.compilation_id:
-                                                full_tx = await _fetch_mcp_transaction(deployment_result.compilation_id)
-                                            # Use full tx if available, fall back to LLM metadata
-                                            tx_data = full_tx if full_tx else tx_metadata
-                                            if full_tx:
-                                                print(f"[ChatAPI] Using full transaction from MCP (data len: {len(str(tx_data.get('data', '')))})")
-                                            else:
-                                                print(f"[ChatAPI] WARNING: Using LLM-provided tx metadata (may lack bytecode)")
+                                            comp_id = deployment_result.compilation_id
+                                            tx_data = dict(tx_metadata)
 
-                                            # Fetch and save compilation data from MCP server
-                                            if deployment_result.compilation_id:
-                                                compilation_data = await _fetch_mcp_compilation(deployment_result.compilation_id)
+                                            # Fetch prepared tx — bytecode must be present for on-chain deployment.
+                                            # Sub-agents use their own conversation_id so event store search is global.
+                                            if comp_id and not (tx_data.get("data") and len(str(tx_data.get("data", ""))) > 10):
+                                                tx_data_field = await _get_tx_data_from_events(conversation_id, comp_id)
+                                                if tx_data_field:
+                                                    tx_data["data"] = tx_data_field
+                                                    print(f"[ChatAPI] Resolved bytecode from event store (len: {len(tx_data_field)})", flush=True)
+
+                                            if comp_id and not (tx_data.get("data") and len(str(tx_data.get("data", ""))) > 10):
+                                                mcp_tx = await _fetch_mcp_transaction(comp_id)
+                                                if mcp_tx and mcp_tx.get("data") and len(str(mcp_tx["data"])) > 10:
+                                                    tx_data.update(mcp_tx)
+                                                    print(f"[ChatAPI] Resolved bytecode from MCP REST (len: {len(str(mcp_tx['data']))})", flush=True)
+
+                                            if not (tx_data.get("data") and len(str(tx_data.get("data", ""))) > 10):
+                                                print(f"[ChatAPI] WARNING: No bytecode resolved for {comp_id}", flush=True)
+
+                                            # Save compilation data to DB
+                                            if comp_id:
+                                                compilation_data = await _fetch_mcp_compilation(comp_id)
                                                 if compilation_data:
                                                     try:
                                                         comp_db = SessionLocal()
                                                         try:
                                                             db_repo.save_compilation(
                                                                 session=comp_db,
-                                                                compilation_id=deployment_result.compilation_id,
+                                                                compilation_id=comp_id,
                                                                 abi=compilation_data.get("abi"),
                                                                 bytecode=compilation_data.get("bytecode"),
                                                                 success=True,
                                                             )
-                                                            print(f"DB: Saved compilation {deployment_result.compilation_id} with abi/bytecode")
+                                                            print(f"DB: Saved compilation {comp_id} with abi/bytecode")
                                                         finally:
                                                             comp_db.close()
                                                     except Exception as comp_db_err:
@@ -205,7 +383,7 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
                                             if deployment_result.gas_price_gwei:
                                                 full_response += f"**Gas Price:** {deployment_result.gas_price_gwei} gwei\n"
                                             full_response += f"**Chain:** Sepolia ({deployment_result.chain_id})\n"
-                                            full_response += f"\n**Transaction Details:**\n```json\n{json.dumps(tx_metadata, indent=2)}\n```"
+                                            full_response += f"\n**Transaction Details:**\n```json\n{json.dumps({k: v for k, v in tx_data.items() if k != 'data'}, indent=2)}\n```"
                                             full_response += "\n\nPlease approve the transaction in your connected wallet to complete the deployment."
 
                                             final_status = "pending_signature"

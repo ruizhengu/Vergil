@@ -10,6 +10,7 @@ from utils.safe_mcp_tool import SafeMCPTool
 from agents.orchestration_agent import OrchestrationAssistant
 from agents.generate_contract_agent import GenerateContractAssistant
 from agents.deployment_agent import DeploymentAssistant
+from agents.execution_agent import ExecutionAssistant
 from contextlib import asynccontextmanager
 import logging
 import uvicorn
@@ -64,7 +65,42 @@ except Exception as e:
     print(f"Warning: Could not setup tracing: {e}")
     tracer = None
 
-async def create_orchestration_assistant(generate_contract_assistant=None, deployment_assistant=None):
+async def create_execution_assistant():
+    """Create the Execution Assistant with MCP tools"""
+    mcp_server_url = os.getenv('MCP_SERVER_URL', 'http://localhost:8081/mcp/')
+    print(f"Connecting to MCP server for execution agent at: {mcp_server_url}")
+
+    mcp_config: Dict[str, StreamableHttpConnection] = {
+        "smart-contract-server": StreamableHttpConnection(
+            url=mcp_server_url,
+            transport="http"
+        )
+    }
+
+    try:
+        print("Building MCP tool for execution agent...")
+        mcp_tool = await MCPTool.builder().connections(mcp_config).build()
+        print("MCP tool built successfully for execution agent")
+
+        print("Building execution assistant...")
+        assistant = (ExecutionAssistant.builder()
+            .name("ExecutionAgent")
+            .model(os.getenv('ZAI_MODEL', 'zai'))
+            .api_key(os.getenv("ZAI_API_KEY", ""))
+            .function_call_tool(mcp_tool)
+            .build()
+        )
+        print("Execution assistant built successfully")
+
+        return assistant
+    except Exception as e:
+        print(f"Error building execution assistant: {e}")
+        print(f"Error type: {type(e)}")
+        print("Running in fallback mode - contract execution will not be available")
+        return None
+
+
+async def create_orchestration_assistant(generate_contract_assistant=None, deployment_assistant=None, execution_assistant=None):
     """Create the Orchestration Assistant with MCP tools"""
     mcp_server_url = os.getenv('MCP_SERVER_URL', 'http://localhost:8081/mcp/')
     print(f"Connecting to MCP server at: {mcp_server_url}")
@@ -92,6 +128,8 @@ async def create_orchestration_assistant(generate_contract_assistant=None, deplo
             builder = builder.generate_contract_assistant(generate_contract_assistant)
         if deployment_assistant is not None:
             builder = builder.deployment_assistant(deployment_assistant)
+        if execution_assistant is not None:
+            builder = builder.execution_assistant(execution_assistant)
         assistant = builder.build()
         print("Orchestration assistant built successfully")
 
@@ -183,6 +221,7 @@ async def lifespan(app: FastAPI):
     app.state.assistant = None
     app.state.generate_contract_assistant = None
     app.state.deployment_assistant = None
+    app.state.execution_assistant = None
 
     # Create database tables
     try:
@@ -211,9 +250,19 @@ async def lifespan(app: FastAPI):
         print(f"Backend API: Failed to initialize deployment assistant: {e}")
         print("Backend API: Deployment delegation will not be available")
 
+    # Build execution assistant (used by orchestration agent via AgentCallingTool)
+    execution_assistant = None
+    try:
+        execution_assistant = await create_execution_assistant()
+        app.state.execution_assistant = execution_assistant
+        print("Backend API: execution assistant built successfully")
+    except Exception as e:
+        print(f"Backend API: Failed to initialize execution assistant: {e}")
+        print("Backend API: Contract execution will not be available")
+
     # Build orchestration assistant, injecting sub-agents
     try:
-        assistant = await create_orchestration_assistant(generate_contract_assistant, deployment_assistant)
+        assistant = await create_orchestration_assistant(generate_contract_assistant, deployment_assistant, execution_assistant)
         app.state.assistant = assistant
         print("Backend API: orchestration assistant built successfully")
     except Exception as e:
@@ -229,6 +278,7 @@ async def lifespan(app: FastAPI):
         app.state.assistant = None
         app.state.generate_contract_assistant = None
         app.state.deployment_assistant = None
+        app.state.execution_assistant = None
         print("Backend API: Lifespan shutdown complete")
 
 app = FastAPI(title="Smart Contract Assistant API", version="1.0.0", lifespan=lifespan)

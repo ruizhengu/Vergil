@@ -4,6 +4,10 @@ import { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '@/stores/appStore';
 import { StatusBadge } from '@/components/StatusBadge';
 import { WalletButton } from '@/components/WalletButton';
+import { TransactionModal } from '@/components/TransactionModal';
+import { apiService } from '@/services/api';
+import { useAccount } from 'wagmi';
+import { useApprovalPolling } from '@/hooks/useApprovalPolling';
 import {
   MessageSquare,
   FileCode,
@@ -133,9 +137,15 @@ function Sidebar() {
 
 // Chat Panel component
 function ChatPanel() {
-  const { messages, addMessage, agent, openDeploymentModal } = useAppStore();
+  const { address, isConnected } = useAccount();
   const [inputValue, setInputValue] = useState('');
+  const [messages, setMessages] = useState<Array<{ id: string; type: string; content: string; isUser: boolean; code?: string; language?: string }>>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [transactionModal, setTransactionModal] = useState<{ isOpen: boolean; approvalRequest: any | null }>({ isOpen: false, approvalRequest: null });
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const { approvalRequests, hasActiveRequest, startPolling, stopPolling, submitApproval } = useApprovalPolling(3000);
 
   const quickActions = [
     { id: 'erc20', label: 'Deploy an ERC-20 token', icon: Coins, prompt: 'Deploy an ERC-20 token named "MyToken" with symbol "MTK" and 1 million supply' },
@@ -144,61 +154,91 @@ function ChatPanel() {
     { id: 'explain', label: 'Explain a contract', icon: FileText, prompt: 'Explain what this smart contract does' },
   ];
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  const generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2);
 
   useEffect(() => {
-    scrollToBottom();
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleSend = () => {
-    if (!inputValue.trim()) return;
+  useEffect(() => {
+    startPolling();
+    return () => stopPolling();
+  }, [startPolling, stopPolling]);
 
-    addMessage({
-      type: 'text',
-      content: inputValue,
-      isUser: true,
-    });
-
-    setInputValue('');
-
-    // Simulate AI response
-    setTimeout(() => {
-      addMessage({
-        type: 'code',
-        content: 'I\'ll help you deploy an ERC-20 token. Here\'s the generated contract:',
-        code: `// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
-
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-
-contract MyToken is ERC20, Ownable {
-    constructor() ERC20("MyToken", "MTK") {
-        _mint(msg.sender, 1000000 * 10 ** decimals());
+  // Register wallet with backend when connected
+  useEffect(() => {
+    if (isConnected && address) {
+      apiService.connectWallet(address, conversationId || undefined).catch(() => {});
     }
-}`,
-        language: 'solidity',
+  }, [isConnected, address, conversationId]);
+
+  // Open approval modal when a pending request arrives
+  useEffect(() => {
+    if (hasActiveRequest && approvalRequests.length > 0 && !transactionModal.isOpen) {
+      setTransactionModal({ isOpen: true, approvalRequest: approvalRequests[0] });
+      setMessages(prev => [...prev, {
+        id: generateId(),
+        type: 'text',
+        content: '🔔 Deployment approval required — please review and sign the transaction in the modal.',
         isUser: false,
+      }]);
+    }
+  }, [hasActiveRequest, approvalRequests, transactionModal.isOpen]);
+
+  const sendMessage = async (content: string) => {
+    if (!content.trim() || isLoading) return;
+
+    setMessages(prev => [...prev, { id: generateId(), type: 'text', content, isUser: true }]);
+    setIsLoading(true);
+
+    try {
+      const response = await apiService.sendMessageReal({
+        message: content,
+        conversationId: conversationId ?? undefined,
       });
-    }, 1500);
+
+      if (response.success && response.data) {
+        const data = response.data;
+        const backendConvId = data.conversation_id;
+        if (backendConvId) {
+          setConversationId(backendConvId);
+          if (isConnected && address) {
+            apiService.connectWallet(address, backendConvId).catch(() => {});
+          }
+        }
+        setMessages(prev => [...prev, { id: generateId(), type: 'text', content: data.response, isUser: false }]);
+      } else {
+        throw new Error(response.error || 'Failed to get response');
+      }
+    } catch (err) {
+      console.error('Failed to send message:', err);
+      setMessages(prev => [...prev, { id: generateId(), type: 'text', content: 'Sorry, something went wrong. Please try again.', isUser: false }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSend = () => {
+    const content = inputValue.trim();
+    if (!content) return;
+    setInputValue('');
+    sendMessage(content);
   };
 
   const handleQuickAction = (prompt: string) => {
-    addMessage({
-      type: 'text',
-      content: prompt,
-      isUser: true,
-    });
+    sendMessage(prompt);
+  };
 
-    setTimeout(() => {
-      addMessage({
-        type: 'deployment_request',
-        content: 'Contract generated and validated. Ready to deploy?',
-        isUser: false,
-      });
-    }, 2000);
+  const handleApprovalSubmit = async (approvalId: string, approved: boolean, signedTxHex?: string, rejectionReason?: string) => {
+    const success = await submitApproval(approvalId, approved, signedTxHex, rejectionReason);
+    if (success) {
+      const resultMsg = approved
+        ? `✅ Transaction signed and submitted successfully!${signedTxHex && signedTxHex.startsWith('ALREADY_BROADCAST:') ? ` Tx: \`${signedTxHex.replace('ALREADY_BROADCAST:', '')}\`` : ''}`
+        : `❌ Deployment rejected.${rejectionReason ? ` Reason: ${rejectionReason}` : ''}`;
+      setMessages(prev => [...prev, { id: generateId(), type: 'text', content: resultMsg, isUser: false }]);
+      setTransactionModal({ isOpen: false, approvalRequest: null });
+    }
+    return success;
   };
 
   return (
@@ -287,21 +327,15 @@ contract MyToken is ERC20, Ownable {
                         </div>
                         <span className="text-sm text-[#c9a84c]">Deployment Ready</span>
                       </div>
-                      <p className="text-xs text-white/50 mb-4">{msg.content}</p>
-                      <button
-                        onClick={openDeploymentModal}
-                        className="w-full capsule-btn-gold text-[10px] py-2"
-                      >
-                        Commit to Chain
-                      </button>
+                      <p className="text-xs text-white/50">{msg.content}</p>
                     </div>
                   )}
                 </div>
               </div>
             ))}
 
-            {/* Agent thinking */}
-            {agent.status === 'reasoning' && (
+            {/* Loading indicator */}
+            {isLoading && (
               <div className="flex justify-start">
                 <div className="w-7 h-7 rounded-full border border-[#4fc3f7]/30 flex items-center justify-center mr-3">
                   <span className="text-[10px] text-[#4fc3f7]">V</span>
@@ -329,17 +363,28 @@ contract MyToken is ERC20, Ownable {
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSend()}
               placeholder="Describe your contract..."
-              className="w-full bg-white/[0.03] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-[#4fc3f7]/40 transition-colors"
+              disabled={isLoading}
+              className="w-full bg-white/[0.03] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-[#4fc3f7]/40 transition-colors disabled:opacity-50"
             />
           </div>
           <button
             onClick={handleSend}
-            className="w-10 h-10 rounded-xl bg-[#4fc3f7]/20 border border-[#4fc3f7]/30 flex items-center justify-center hover:bg-[#4fc3f7]/30 transition-colors"
+            disabled={isLoading}
+            className="w-10 h-10 rounded-xl bg-[#4fc3f7]/20 border border-[#4fc3f7]/30 flex items-center justify-center hover:bg-[#4fc3f7]/30 transition-colors disabled:opacity-50"
           >
             <Send className="w-4 h-4 text-[#4fc3f7]" />
           </button>
         </div>
       </div>
+
+      {/* Transaction/Approval Modal */}
+      <TransactionModal
+        isOpen={transactionModal.isOpen}
+        onClose={() => setTransactionModal({ isOpen: false, approvalRequest: null })}
+        approvalRequest={transactionModal.approvalRequest}
+        mode="approval"
+        onApprovalSubmit={handleApprovalSubmit}
+      />
     </main>
   );
 }

@@ -104,6 +104,34 @@ def get_compilations_by_contract(session: Session, contract_id: str) -> List[Com
     )
 
 
+def get_deployments_by_conversation(session: Session, conversation_id: str) -> list:
+    """
+    Return list of deployed contract info for a given conversation.
+    Traverses: contracts (conversation_id) → compilations → deployments.
+    Only returns deployments with a known contract_address and status='deployed'.
+    """
+    contracts = (
+        session.query(Contract)
+        .filter(Contract.conversation_id == conversation_id)
+        .all()
+    )
+    results = []
+    for contract in contracts:
+        for compilation in contract.compilations:
+            if not compilation.abi:
+                continue
+            for deployment in compilation.deployments:
+                if deployment.contract_address and deployment.status == "deployed":
+                    results.append({
+                        "contract_name": contract.contract_name,
+                        "contract_type": contract.contract_type,
+                        "contract_address": deployment.contract_address,
+                        "compilation_id": compilation.compilation_id,
+                        "abi": compilation.abi,
+                    })
+    return results
+
+
 def get_deployments_by_compilation(session: Session, compilation_id_ref: str) -> List[Deployment]:
     return (
         session.query(Deployment)

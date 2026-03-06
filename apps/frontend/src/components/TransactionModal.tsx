@@ -76,7 +76,12 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
         
         setSignStatus('signing');
         console.log('Transaction data received:', currentTransactionData);
-        
+
+        // Validate bytecode is present — without it, an empty contract gets deployed
+        if (!currentTransactionData.data || currentTransactionData.data.length < 10) {
+          throw new Error('Transaction bytecode is missing. The contract cannot be deployed without compiled bytecode. Please try again.');
+        }
+
         // Prepare transaction for sending (browser wallets use sendTransaction, not signTransaction)
         // For contract deployments, 'to' must be undefined (not empty string or "0x")
         const toAddress = currentTransactionData.to && currentTransactionData.to !== '0x' && currentTransactionData.to.length === 42

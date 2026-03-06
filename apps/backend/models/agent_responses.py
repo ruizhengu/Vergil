@@ -17,6 +17,10 @@ class ReasoningResponse(BaseModel):
         default=False,
         description="Whether this request should be routed to the contract generation agent"
     )
+    requires_execution: bool = Field(
+        default=False,
+        description="Whether this request requires calling a function on a deployed contract"
+    )
     solidity_code: Optional[str] = Field(
         default=None,
         description="Solidity source code from contract generation or context, pass through as-is"
