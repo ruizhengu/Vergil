@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import VergilSigil from '@/components/VergilSigil';
 import { useAppStore } from '@/stores/appStore';
@@ -20,6 +20,38 @@ const Navbar = () => {
       element.scrollIntoView({ behavior: 'smooth' });
     }
   };
+
+  // Sync active section with scroll position
+  useEffect(() => {
+    const sections = ['philosophy', 'architecture', 'deploy'];
+
+    const observerOptions = {
+      root: null,
+      rootMargin: '-20% 0px -60% 0px',
+      threshold: 0,
+    };
+
+    const observerCallback: IntersectionObserverCallback = (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          setActiveSection(entry.target.id);
+        }
+      });
+    };
+
+    const observer = new IntersectionObserver(observerCallback, observerOptions);
+
+    sections.forEach((sectionId) => {
+      const element = document.getElementById(sectionId);
+      if (element) {
+        observer.observe(element);
+      }
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   const navItems = ['Philosophy', 'Architecture', 'Deploy'];
 
