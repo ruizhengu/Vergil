@@ -6,6 +6,10 @@ An AI-powered smart contract development platform built on the **Graphite** even
 
 ![workflow](assets/smart_contract_workflow.png)
 
+### Multi-Agent System
+
+![multi-agent system](images/agents.png)
+
 ### Components
 
 - **Frontend**: Next.js 14 React application with Wagmi/RainbowKit wallet integration
@@ -259,6 +263,8 @@ Your MyToken contract is now live on Sepolia testnet! 🎉
 ```
 
 ## 🛠Technology Stack
+
+![tech stack](images/stack.png)
 
 ### Backend
 - **Graphite Framework**: Event-driven AI agent architecture with event sourcing
