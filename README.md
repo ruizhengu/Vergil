@@ -4,8 +4,6 @@ An AI-powered smart contract development platform built on the **Graphite** even
 
 ## Architecture
 
-![workflow](assets/smart_contract_workflow.png)
-
 ### Multi-Agent System
 
 ![multi-agent system](images/agents.png)
@@ -294,6 +292,7 @@ Your MyToken contract is now live on Sepolia testnet! 🎉
 ## Acknowledgments
 
 Built with love using open-source technologies. Special thanks to the Binome team for making this project possible.
+
 
 
 
