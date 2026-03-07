@@ -6,6 +6,58 @@ Vergil is an AI-powered smart contract development platform that lets developers
 
 **Team:** Maska (multi-agent system) | Ruizhen (full stack) | Baiyang (verification) | Yangni (UI/UX)
 
+## Hackathon Tracks 🏆
+
+Vergil is competing in three bounty tracks that align with our mission to build safe, scalable, and impactful AI agent systems for Web3:
+
+### 🌍 AI Agents for Good: FLock Track
+
+**Focus:** SDG-aligned agentic AI solutions
+
+Vergil addresses real-world financial inclusion and smart contract security challenges (UN SDG 9, 10, 16) by democratizing smart contract development through natural language interfaces and formal verification.
+
+**How Vergil Qualifies:**
+- ✅ Autonomous multi-agent orchestration for contract generation and verification
+- ✅ Real-world impact: Lowering technical barriers to Web3 development
+- ✅ Multi-channel deployment ready (can integrate WhatsApp/Telegram interfaces)
+- ✅ Open-source model integration via OpenClaw framework
+
+**Alignment:** Our neuro-symbolic verification system ensures smart contracts are provably safe before deployment — critical for protecting users in decentralized finance and governance applications.
+
+---
+
+### 🤖 Z.AI General Bounty: Production-Ready AI Agents
+
+**Focus:** Scalable AI agents powered by Z.AI (GLM series models)
+
+Vergil is a production-grade multi-agent system built on enterprise-ready infrastructure with persistent storage, event sourcing, and formal verification.
+
+**How Vergil Qualifies:**
+- ✅ Integrates Z.AI's GLM series models for reasoning, code generation, and orchestration
+- ✅ Working live demo at [vergil-kappa.vercel.app](https://vergil-kappa.vercel.app/)
+- ✅ Full GitHub repository with comprehensive documentation
+- ✅ Meaningful GLM usage: Intent classification, contract generation, security reasoning, deployment planning
+
+**Technical Excellence:** Our event-driven architecture supports complex reasoning workflows with full auditability — not just a demo, but a deployable Web3 development platform.
+
+---
+
+### 🦁 Animoca Bounty: Build Agents That Think
+
+**Focus:** Multi-agent systems with identity, memory, and cognition
+
+Vergil demonstrates advanced multi-agent coordination through specialized agents that collaborate to generate, verify, and deploy smart contracts safely.
+
+**How Vergil Qualifies:**
+- ✅ **Multi-Agent System:** Five coordinated agents (Orchestration, Generation, Deployment, Execution, Verification) working in concert
+- ✅ **Agent Memory:** PostgreSQL-backed event sourcing maintains full conversation context across sessions
+- ✅ **Agent Cognition:** Formal verification layer uses symbolic reasoning (Z3 SMT solver) for mathematical safety proofs
+- ✅ **Real-World Problem Solving:** Solves the critical challenge of AI-generated code security in high-stakes Web3 environments
+
+**Innovation:** Our agents don't just generate code — they mathematically verify correctness before execution. This represents a new paradigm for trustworthy AI systems in irreversible transaction environments.
+
+---
+
 ## Features ✨
 
 - **Natural Language Contract Generation**: Describe what you need in natural language, such as plain English — ERC20 tokens, NFTs, custom contracts
