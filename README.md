@@ -1,44 +1,75 @@
-# Graphite Smart Contract Assistant 
+# Vergil: Smart Contract Agent
 
-An AI-powered smart contract development platform built on the **Graphite** event-driven AI agent framework. Features a Next.js frontend, FastAPI backend with ReAct agents, and MCP (Model Context Protocol) server for intelligent blockchain development assistance with wallet integration and approval workflows.
+**Live:** [https://vergil-kappa.vercel.app/](https://vergil-kappa.vercel.app/)
 
-## Architecture
+Vergil is an AI-powered smart contract development platform that lets developers create, deploy, and interact with Solidity contracts through natural conversation. Built on Graphite's event-driven agent framework, it combines multi-agent orchestration with OpenZeppelin security standards.
+
+**Team:** Maska (multi-agent system) | Ruizhen (full stack) | Baiyang (verification) | Yangni (UI/UX)
+
+## Features ✨
+
+- **Natural Language Contract Generation**: Describe what you need in plain English — ERC20 tokens, NFTs, custom contracts
+- **One-Click Deployment**: Compile and deploy to Ethereum Sepolia with your wallet in seconds
+- **Automatic Verification**: Contracts are verified on Etherscan upon deployment
+- **Contract Interaction**: Read state and execute functions on deployed contracts through chat
+- **Persistent Context**: Full conversation history via event-sourced PostgreSQL storage
+
+## Architecture 🏗️
 
 ### Multi-Agent System
 
 ![multi-agent system](images/agents.png)
 
-### Components
+Vergil runs five specialized agents on the Graphite event-driven framework:
 
-- **Frontend**: Next.js 14 React application with Wagmi/RainbowKit wallet integration
-- **Backend**: FastAPI server with ReAct agents, approval workflows, and event sourcing  
-- **MCP Server**: Smart contract generation, compilation, and deployment tools
-- **Database**: PostgreSQL for event sourcing, conversation history, and approval tracking
-- **Framework**: Built on **Graphite** - an event-driven AI agent framework
-- **Blockchain**: Ethereum Sepolia testnet integration with user wallet signing
+- **OrchestrationAgent** — Routes requests to the right agent after intent classification
+- **GenerateContractAgent** — Generates ERC20/ERC721/ERC1155 or custom contracts from natural language
+- **DeploymentAgent** — Compiles code, prepares transactions, broadcasts to Sepolia
+- **ExecutionAgent** — Handles read (view functions) and write (state-changing) calls
+- **Contract Verification** — Automatically verifies deployed contracts on Etherscan
 
-## Features
+### Contract Verification
 
-### AI Agent Capabilities
-- **ReAct Agent Architecture**: Advanced reasoning with THOUGHT → ACTION → OBSERVATION flow
-- **Natural Language Processing**: Create smart contracts with conversational prompts
-- **Context Awareness**: Persistent conversation history and tool result integration
-- **Error Recovery**: Automatic retry logic and fallback handling
+![Contract Verification](images/verification.png)
 
-### Blockchain Integration  
-- **Smart Contract Generation**: ERC20 & ERC721 tokens with advanced features
-- **Solidity Compilation**: Automated compilation with OpenZeppelin integration
-- **User Wallet Deployment**: Deploy contracts using connected MetaMask/WalletConnect
-- **Approval Workflows**: User confirmation for transactions with real-time status
-- **Testnet Support**: Ethereum Sepolia testnet integration
+![Contract Verification Example](images/verification_example.png)
 
-### Enterprise Architecture
-- **Event Sourcing**: Complete audit trail and state recovery via PostgreSQL
-- **Structured Responses**: Type-safe API responses with Pydantic models  
-- **MCP Protocol**: Modular tool system for blockchain operations
-- **Docker Containerized**: Production-ready deployment configuration
+After deployment, contracts are automatically verified on Etherscan. Users can then read contract state (`balanceOf`, `totalSupply`, etc.) and execute write functions directly from the browser.
 
-##  Quick Start
+## Technology Stack 🛠️
+
+![tech stack](images/stack.png)
+
+### Backend
+
+- **Graphite Framework**: Event-driven AI agent architecture with event sourcing
+- **FastAPI**: High-performance Python web framework
+- **PostgreSQL**: Event store and conversation persistence
+- **FastMCP**: Model Context Protocol for modular tool integration
+- **Pydantic**: Type-safe data validation and serialization
+
+### Frontend  
+
+- **Next.js 14**: React framework with App Router
+- **Wagmi**: React hooks for Ethereum integration
+- **RainbowKit**: Wallet connection UI components
+- **Tailwind CSS**: Utility-first CSS framework
+- **TypeScript**: Type-safe JavaScript development
+
+### Blockchain
+
+- **OpenZeppelin**: Secure smart contract templates
+- **Solidity**: Smart contract programming language
+- **Web3.py**: Python Ethereum library
+- **Ethereum Sepolia**: Testnet for safe contract deployment
+
+### DevOps
+
+- **Docker**: Containerized development and deployment
+- **uv**: Fast Python package manager
+- **Ruff**: Python linter and formatter
+
+## Quick Start 🚀
 
 ### Prerequisites
 
@@ -51,8 +82,8 @@ An AI-powered smart contract development platform built on the **Graphite** even
 ### 1. Clone Repository
 
 ```bash
-git clone <your-repository-url>
-cd graphite_test
+git clone https://github.com/ruizhengu/Vergil.git
+cd Vergil
 ```
 
 ### 2. Environment Setup
@@ -119,21 +150,7 @@ docker-compose up --build -d
 - **MCP Server**: http://localhost:8081/mcp/
 - **pgAdmin**: http://localhost:5050
 
-### Code Quality
-
-```bash
-# Linting
-ruff check .
-
-# Type checking  
-mypy .
-
-# Formatting
-ruff format .
-
-```
-
-## Project Structure
+## Project Structure 📁
 
 ```
 ├── apps/
@@ -172,7 +189,7 @@ ruff format .
 └── package.json                 # Root package.json (OpenZeppelin contracts)
 ```
 
-##  Configuration
+## Configuration ⚙️
 
 ### Docker Services
 
@@ -182,7 +199,7 @@ ruff format .
 - **backend**: FastAPI application server
 - **frontend**: Next.js web application
 
-##  Usage Examples
+## Usage Examples 💬
 
 ### Creating an ERC20 Token with Natural Language
 
@@ -222,9 +239,9 @@ contract MyToken is ERC20 {
     }
 }
 ```
-```
+
 Would you like me to compile and deploy this contract to Sepolia testnet?
-```
+
 ### Deployment with User Wallet Approval
 
 ```
@@ -260,41 +277,7 @@ ACTION: compile_contract → prepare_deployment_transaction
 Your MyToken contract is now live on Sepolia testnet! 🎉
 ```
 
-## 🛠Technology Stack
+## Acknowledgments 🙏
 
-![tech stack](images/stack.png)
-
-### Backend
-- **Graphite Framework**: Event-driven AI agent architecture with event sourcing
-- **FastAPI**: High-performance Python web framework
-- **PostgreSQL**: Event store and conversation persistence
-- **FastMCP**: Model Context Protocol for modular tool integration
-- **Pydantic**: Type-safe data validation and serialization
-
-### Frontend  
-- **Next.js 14**: React framework with App Router
-- **Wagmi**: React hooks for Ethereum integration
-- **RainbowKit**: Wallet connection UI components
-- **Tailwind CSS**: Utility-first CSS framework
-- **TypeScript**: Type-safe JavaScript development
-
-### Blockchain
-- **OpenZeppelin**: Secure smart contract templates
-- **Solidity**: Smart contract programming language
-- **Web3.py**: Python Ethereum library
-- **Ethereum Sepolia**: Testnet for safe contract deployment
-
-### DevOps
-- **Docker**: Containerized development and deployment
-- **uv**: Fast Python package manager
-- **Ruff**: Python linter and formatter
-
-## Acknowledgments
-
-Built with love using open-source technologies. Special thanks to the Binome team for making this project possible.
-
-
-
-
-
+Built with open-source technologies. Special thanks to the Binome team.
 
