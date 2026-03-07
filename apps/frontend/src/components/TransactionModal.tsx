@@ -26,6 +26,7 @@ interface ApprovalRequest {
   transaction_data: TransactionData;
   timestamp: string;
   message: string;
+  contract_type?: string;
 }
 
 interface TransactionModalProps {
@@ -33,7 +34,7 @@ interface TransactionModalProps {
   onClose: () => void;
   transactionData?: TransactionData | null;
   approvalRequest?: ApprovalRequest | null;
-  onApprovalSubmit?: (approvalId: string, approved: boolean, signedTxHex?: string, rejectionReason?: string) => Promise<boolean>;
+  onApprovalSubmit?: (approvalId: string, approved: boolean, signedTxHex?: string, rejectionReason?: string) => Promise<boolean | { success: boolean; message?: string }>;
   mode?: 'transaction' | 'approval'; // 'transaction' mode is deprecated, only 'approval' should be used
 }
 
@@ -58,6 +59,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
   if (!isOpen || !currentTransactionData) return null;
 
   const isApprovalMode = mode === 'approval' && approvalRequest;
+  const isInteraction = approvalRequest?.contract_type === 'Contract Function Call';
 
   const handleConfirm = async () => {
     if (!walletClient || !address) {
@@ -78,7 +80,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
         console.log('Transaction data received:', currentTransactionData);
 
         // Validate bytecode is present — without it, an empty contract gets deployed
-        if (!currentTransactionData.data || currentTransactionData.data.length < 10) {
+        if (!isInteraction && (!currentTransactionData.data || currentTransactionData.data.length < 10)) {
           throw new Error('Transaction bytecode is missing. The contract cannot be deployed without compiled bytecode. Please try again.');
         }
 
@@ -110,11 +112,12 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
             console.log('Transaction signed successfully:', serializedTx);
 
             // Submit approval with signed transaction hex
-            const approvalSuccess = await onApprovalSubmit(
-              approvalRequest!.approval_id, 
-              true, 
+            const approvalResult = await onApprovalSubmit(
+              approvalRequest!.approval_id,
+              true,
               serializedTx
             );
+            const approvalSuccess = typeof approvalResult === 'boolean' ? approvalResult : approvalResult.success;
 
             if (approvalSuccess) {
               setSignStatus('success');
@@ -143,13 +146,14 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
               console.log('Transaction sent directly, hash:', txHash);
 
               // Submit approval with tx hash prefixed so backend knows it's already broadcast
-              const approvalSuccess = await onApprovalSubmit(
+              const approvalResult2 = await onApprovalSubmit(
                 approvalRequest!.approval_id,
                 true,
                 `ALREADY_BROADCAST:${txHash}`
               );
+              const approvalSuccess2 = typeof approvalResult2 === 'boolean' ? approvalResult2 : approvalResult2.success;
 
-              if (approvalSuccess) {
+              if (approvalSuccess2) {
                 setSignStatus('success');
                 console.log('Approval and transaction hash submitted successfully');
                 
@@ -196,22 +200,23 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
       setSignStatus('approving');
       
       try {
-        const success = await onApprovalSubmit(
+        const rejectResult = await onApprovalSubmit(
           approvalRequest.approval_id,
           false,
           undefined,
-          rejectionReason || 'User rejected deployment'
+          rejectionReason || (isInteraction ? 'User rejected transaction' : 'User rejected deployment')
         );
+        const success = typeof rejectResult === 'boolean' ? rejectResult : rejectResult.success;
 
         if (success) {
-          console.log('Deployment rejected successfully');
+          console.log('Transaction rejected successfully');
           onClose();
         } else {
           throw new Error('Failed to submit rejection');
         }
       } catch (error: any) {
-        console.error('Error rejecting deployment:', error);
-        setErrorMessage(error.message || 'Failed to reject deployment');
+        console.error('Error rejecting transaction:', error);
+        setErrorMessage(error.message || 'Failed to reject transaction');
         setSignStatus('error');
       } finally {
         setIsConfirming(false);
@@ -244,7 +249,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
     <div className="modal-overlay">
       <div className="modal-content transaction-modal">
         <div className="modal-header">
-          <h3>Confirm Contract Deployment</h3>
+          <h3>{isInteraction ? 'Confirm Contract Interaction' : 'Confirm Contract Deployment'}</h3>
           <button onClick={() => {
             // Reset state when closing via X button
             setIsConfirming(false);
@@ -260,7 +265,9 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
           <div className="transaction-warning">
             <AlertTriangle size={20} className="warning-icon" />
             <p>
-              You are about to deploy a smart contract. Please review the transaction details carefully.
+              {isInteraction
+                ? 'You are about to call a function on a smart contract. Please review the transaction details carefully.'
+                : 'You are about to deploy a smart contract. Please review the transaction details carefully.'}
             </p>
           </div>
 
@@ -274,7 +281,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
 
             <div className="detail-row">
               <span className="detail-label">Type:</span>
-              <span className="detail-value">Contract Deployment</span>
+              <span className="detail-value">{isInteraction ? 'Contract Interaction' : 'Contract Deployment'}</span>
             </div>
 
             <div className="detail-row">
@@ -314,7 +321,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
             {signStatus === 'approving' && '🔄 Submitting approval response...'}
             {signStatus === 'signing' && '🔄 Please sign the transaction in your wallet...'}
             {signStatus === 'broadcasting' && '📡 Broadcasting transaction to network...'}
-            {signStatus === 'success' && '✅ Transaction successful! Contract deployed.'}
+            {signStatus === 'success' && `✅ Transaction successful! ${isInteraction ? 'Contract function called.' : 'Contract deployed.'}`}
             {signStatus === 'error' && `❌ ${errorMessage}`}
           </div>
         )}

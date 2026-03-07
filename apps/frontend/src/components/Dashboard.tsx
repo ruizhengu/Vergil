@@ -247,11 +247,15 @@ function ChatPanel() {
   // Open approval modal when a pending request arrives
   useEffect(() => {
     if (hasActiveRequest && approvalRequests.length > 0 && !transactionModal.isOpen) {
-      setTransactionModal({ isOpen: true, approvalRequest: approvalRequests[0] });
+      const req = approvalRequests[0];
+      const isInteraction = req.contract_type === 'Contract Function Call';
+      setTransactionModal({ isOpen: true, approvalRequest: req });
       setMessages(prev => [...prev, {
         id: generateId(),
         type: 'text',
-        content: '🔔 Deployment approval required — please review and sign the transaction in the modal.',
+        content: isInteraction
+          ? '🔔 Transaction approval required — please review and sign the contract interaction in the modal.'
+          : '🔔 Deployment approval required — please review and sign the transaction in the modal.',
         isUser: false,
       }]);
     }
@@ -284,11 +288,33 @@ function ChatPanel() {
       if (response.success && response.data) {
         const { addTraceEvent, setTraceComplete } = getStoreState();
 
-        // Add trace events for contract generation
-        addTraceEvent('Generating contract code...', 'completed');
-        addTraceEvent('Verifying contract security...', 'running');
-
         const data = response.data;
+        const sr = data.structured_response as Record<string, any> | undefined;
+        const isDeployment = data.status === 'pending_signature' && sr && 'compilation_id' in sr && !('function_type' in sr);
+        const isInteractionWrite = data.status === 'pending_signature' && sr && sr.function_type === 'write';
+        const isInteractionRead = sr && sr.function_type === 'read';
+
+        if (isDeployment) {
+          addTraceEvent('Contract compiled', 'completed');
+          addTraceEvent('Deployment transaction prepared', 'completed');
+          addTraceEvent('Awaiting wallet signature...', 'running');
+        } else if (isInteractionWrite) {
+          addTraceEvent('Contract function identified', 'completed');
+          addTraceEvent('Transaction prepared', 'completed');
+          addTraceEvent('Awaiting wallet signature...', 'running');
+        } else if (isInteractionRead) {
+          addTraceEvent('Contract function identified', 'completed');
+          addTraceEvent('Reading blockchain state...', 'completed');
+          addTraceEvent('Response generated', 'completed');
+          setTraceComplete();
+        } else {
+          // Contract generation / general response
+          addTraceEvent('Generating contract code...', 'completed');
+          addTraceEvent('Verifying contract security...', 'completed');
+          addTraceEvent('Response generated', 'completed');
+          setTraceComplete();
+        }
+
         const backendConvId = data.conversation_id;
         if (backendConvId) {
           setConversationId(backendConvId);
@@ -296,20 +322,6 @@ function ChatPanel() {
             apiService.connectWallet(address, backendConvId).catch(() => {});
           }
         }
-
-        // Check if it's a contract deployment/generation response
-        if (data.response && (
-          data.response.includes('contract') ||
-          data.response.includes('ERC-20') ||
-          data.response.includes('ERC-721') ||
-          data.response.includes('deployed') ||
-          data.response.includes('Generated')
-        )) {
-          addTraceEvent('Security verification passed', 'completed');
-        }
-
-        addTraceEvent('Response generated', 'completed');
-        setTraceComplete();
 
         setMessages(prev => [...prev, { id: generateId(), type: 'text', content: data.response, isUser: false }]);
       } else {
@@ -337,15 +349,31 @@ function ChatPanel() {
   };
 
   const handleApprovalSubmit = async (approvalId: string, approved: boolean, signedTxHex?: string, rejectionReason?: string) => {
-    const success = await submitApproval(approvalId, approved, signedTxHex, rejectionReason);
-    if (success) {
-      const resultMsg = approved
-        ? `✅ Transaction signed and submitted successfully!${signedTxHex && signedTxHex.startsWith('ALREADY_BROADCAST:') ? ` Tx: \`${signedTxHex.replace('ALREADY_BROADCAST:', '')}\`` : ''}`
-        : `❌ Deployment rejected.${rejectionReason ? ` Reason: ${rejectionReason}` : ''}`;
+    const isInteraction = transactionModal.approvalRequest?.contract_type === 'Contract Function Call';
+    const { addTraceEvent, setTraceComplete } = getStoreState();
+    const result = await submitApproval(approvalId, approved, signedTxHex, rejectionReason);
+    if (result.success) {
+      let resultMsg: string;
+      if (!approved) {
+        addTraceEvent(isInteraction ? 'Transaction rejected' : 'Deployment rejected', 'error');
+        setTraceComplete();
+        resultMsg = isInteraction
+          ? `Transaction rejected.${rejectionReason ? ` Reason: ${rejectionReason}` : ''}`
+          : `Deployment rejected.${rejectionReason ? ` Reason: ${rejectionReason}` : ''}`;
+      } else if (result.message) {
+        addTraceEvent(isInteraction ? 'Transaction broadcast' : 'Contract deployed', 'completed');
+        setTraceComplete();
+        resultMsg = result.message;
+      } else {
+        const txHash = signedTxHex?.startsWith('ALREADY_BROADCAST:') ? signedTxHex.replace('ALREADY_BROADCAST:', '') : signedTxHex;
+        addTraceEvent(isInteraction ? 'Transaction broadcast' : 'Contract deployed', 'completed');
+        setTraceComplete();
+        resultMsg = `Transaction submitted.${txHash ? ` Hash: ${txHash}` : ''}`;
+      }
       setMessages(prev => [...prev, { id: generateId(), type: 'text', content: resultMsg, isUser: false }]);
       setTransactionModal({ isOpen: false, approvalRequest: null });
     }
-    return success;
+    return result.success;
   };
 
   return (

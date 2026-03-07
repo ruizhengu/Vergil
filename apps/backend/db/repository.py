@@ -104,11 +104,16 @@ def get_compilations_by_contract(session: Session, contract_id: str) -> List[Com
     )
 
 
-def get_deployments_by_conversation(session: Session, conversation_id: str) -> list:
+def get_deployments_by_conversation(
+    session: Session,
+    conversation_id: str,
+    deployer_address: Optional[str] = None,
+) -> list:
     """
     Return list of deployed contract info for a given conversation.
-    Traverses: contracts (conversation_id) → compilations → deployments.
-    Only returns deployments with a known contract_address and status='deployed'.
+    Primary path: contracts (conversation_id) → compilations → deployments.
+    Fallback path: if the primary path finds nothing (no Contract row saved),
+    query deployments directly by deployer_address.
     """
     contracts = (
         session.query(Contract)
@@ -116,12 +121,15 @@ def get_deployments_by_conversation(session: Session, conversation_id: str) -> l
         .all()
     )
     results = []
+    seen_addresses: set = set()
+
     for contract in contracts:
         for compilation in contract.compilations:
             if not compilation.abi:
                 continue
             for deployment in compilation.deployments:
                 if deployment.contract_address and deployment.status == "deployed":
+                    seen_addresses.add(deployment.contract_address)
                     results.append({
                         "contract_name": contract.contract_name,
                         "contract_type": contract.contract_type,
@@ -129,6 +137,35 @@ def get_deployments_by_conversation(session: Session, conversation_id: str) -> l
                         "compilation_id": compilation.compilation_id,
                         "abi": compilation.abi,
                     })
+
+    # Fallback: no Contract row exists for this conversation (e.g. deploy-only flow).
+    # Query deployments directly by deployer_address.
+    if not results and deployer_address:
+        deployments = (
+            session.query(Deployment)
+            .filter(
+                Deployment.deployer_address == deployer_address,
+                Deployment.contract_address.isnot(None),
+                Deployment.status == "deployed",
+            )
+            .order_by(Deployment.created_at.desc())
+            .all()
+        )
+        for dep in deployments:
+            if dep.contract_address in seen_addresses:
+                continue
+            comp = dep.compilation
+            if comp and comp.abi:
+                contract_name = comp.contract.contract_name if comp.contract else "Contract"
+                contract_type = comp.contract.contract_type if comp.contract else None
+                results.append({
+                    "contract_name": contract_name,
+                    "contract_type": contract_type,
+                    "contract_address": dep.contract_address,
+                    "compilation_id": comp.compilation_id,
+                    "abi": comp.abi,
+                })
+
     return results
 
 

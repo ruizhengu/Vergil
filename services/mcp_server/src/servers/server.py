@@ -569,8 +569,8 @@ async def call_contract_function(
     function_name: Annotated[str, Field(
         description="Name of the function to call"
     )],
-    function_args: Annotated[Optional[List[str]], Field(
-        description="Function arguments as a list of strings"
+    function_args: Annotated[Optional[str], Field(
+        description="Function arguments as a JSON array string, e.g. '[\"0xAddress\", \"100\"]'"
     )] = None,
 ) -> dict:
     """Call a read-only contract function. Returns the result without any transaction."""
@@ -586,7 +586,16 @@ async def call_contract_function(
         address = w3.to_checksum_address(contract_address)
         contract = w3.eth.contract(address=address, abi=abi)
 
-        args = function_args or []
+        args: list = []
+        if function_args:
+            if isinstance(function_args, list):
+                args = function_args
+            else:
+                try:
+                    parsed = json.loads(function_args)
+                    args = parsed if isinstance(parsed, list) else [str(parsed)]
+                except json.JSONDecodeError:
+                    args = [function_args]
         converted_args = _build_converted_args(abi, function_name, args)
         print(f"[MCP] call_contract_function: {function_name}({converted_args}) on {address}")
 
@@ -625,8 +634,8 @@ async def prepare_contract_call_transaction(
     function_name: Annotated[str, Field(
         description="Name of the function to call"
     )],
-    function_args: Annotated[Optional[List[str]], Field(
-        description="Function arguments as a list of strings"
+    function_args: Annotated[Optional[str], Field(
+        description="Function arguments as a JSON array string, e.g. '[\"0xAddress\", \"100\"]'"
     )] = None,
     user_wallet_address: Annotated[str, Field(
         description="User's wallet address that will sign the transaction"
@@ -653,7 +662,16 @@ async def prepare_contract_call_transaction(
         if not user_address:
             return {"success": False, "message": "user_wallet_address is required for write calls"}
 
-        args = function_args or []
+        args: list = []
+        if function_args:
+            if isinstance(function_args, list):
+                args = function_args
+            else:
+                try:
+                    parsed = json.loads(function_args)
+                    args = parsed if isinstance(parsed, list) else [str(parsed)]
+                except json.JSONDecodeError:
+                    args = [function_args]
         converted_args = _build_converted_args(abi, function_name, args)
         print(f"[MCP] prepare_contract_call_transaction: {function_name}({converted_args}) on {address}")
 

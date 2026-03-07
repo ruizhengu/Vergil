@@ -179,10 +179,35 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
                 # Inject connected wallet address so agents can use it for deployment
                 # Fall back to "default" session if conversation-specific wallet not set
                 wallet_address = get_wallet_for_conversation(conversation_id) or get_wallet_for_conversation("default")
-                user_message = chat_request.message
+
+                # Inject deployed contract info so reasoning node knows what's already live
+                deployed_context = ""
+                try:
+                    _dep_db = SessionLocal()
+                    try:
+                        deployments = db_repo.get_deployments_by_conversation(
+                            _dep_db, conversation_id, deployer_address=wallet_address
+                        )
+                        if deployments:
+                            deployed_context = "[Deployed contracts:\n"
+                            for d in deployments:
+                                deployed_context += (
+                                    f"  - {d['contract_name']} at {d['contract_address']}"
+                                    f" (compilation_id: {d['compilation_id']})\n"
+                                )
+                            deployed_context += "]\n"
+                            print(f"[ChatAPI] Injecting {len(deployments)} deployed contract(s) into message", flush=True)
+                    finally:
+                        _dep_db.close()
+                except Exception as _e:
+                    print(f"[ChatAPI] Failed to fetch deployed contracts for injection: {_e}", flush=True)
+
+                prefix = ""
                 if wallet_address:
-                    user_message = f"[Connected wallet: {wallet_address}]\n\n{chat_request.message}"
-                    print(f"[ChatAPI] Injecting wallet {wallet_address} into message", flush=True)
+                    prefix += f"[Connected wallet: {wallet_address}]\n"
+                if deployed_context:
+                    prefix += deployed_context
+                user_message = f"{prefix}\n{chat_request.message}" if prefix else chat_request.message
 
                 input_data = conversation_history + [Message(role="user", content=user_message)]
 
@@ -236,8 +261,19 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
                                         try:
                                             parsed_content = json.loads(raw)
                                         except json.JSONDecodeError:
-                                            # Not valid JSON, use as plain string
-                                            parsed_content = raw
+                                            # Try extracting leading JSON (GLM hybrid: JSON + plain text)
+                                            if raw.startswith('{'):
+                                                try:
+                                                    _decoder = json.JSONDecoder()
+                                                    _parsed, _remainder = _decoder.raw_decode(raw)
+                                                    if isinstance(_parsed, dict):
+                                                        parsed_content = _parsed
+                                                    else:
+                                                        parsed_content = raw
+                                                except json.JSONDecodeError:
+                                                    parsed_content = raw
+                                            else:
+                                                parsed_content = raw
                                     else:
                                         parsed_content = message.content
                                     print('parsed_content', str(parsed_content)[:200])
@@ -363,28 +399,33 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
                                                     try:
                                                         comp_db = SessionLocal()
                                                         try:
+                                                            # Link compilation to the latest contract for this conversation
+                                                            conv_contracts = db_repo.get_contracts_by_conversation(comp_db, conversation_id)
+                                                            contract_id_link = conv_contracts[0].id if conv_contracts else None
                                                             db_repo.save_compilation(
                                                                 session=comp_db,
                                                                 compilation_id=comp_id,
+                                                                contract_id=contract_id_link,
                                                                 abi=compilation_data.get("abi"),
                                                                 bytecode=compilation_data.get("bytecode"),
                                                                 success=True,
                                                             )
-                                                            print(f"DB: Saved compilation {comp_id} with abi/bytecode")
+                                                            print(f"DB: Saved compilation {comp_id} linked to contract {contract_id_link}")
                                                         finally:
                                                             comp_db.close()
                                                     except Exception as comp_db_err:
                                                         print(f"DB: Error saving compilation: {comp_db_err}")
 
-                                            full_response = f"**Deployment Transaction Prepared**\n\n"
-                                            full_response += f"**Compilation ID:** {deployment_result.compilation_id}\n"
+                                            lines = ["Deployment transaction ready."]
+                                            if deployment_result.compilation_id:
+                                                lines.append(f"Compilation ID: {deployment_result.compilation_id}")
                                             if deployment_result.estimated_gas:
-                                                full_response += f"**Estimated Gas:** {deployment_result.estimated_gas:,}\n"
+                                                lines.append(f"Estimated gas: {deployment_result.estimated_gas:,}")
                                             if deployment_result.gas_price_gwei:
-                                                full_response += f"**Gas Price:** {deployment_result.gas_price_gwei} gwei\n"
-                                            full_response += f"**Chain:** Sepolia ({deployment_result.chain_id})\n"
-                                            full_response += f"\n**Transaction Details:**\n```json\n{json.dumps({k: v for k, v in tx_data.items() if k != 'data'}, indent=2)}\n```"
-                                            full_response += "\n\nPlease approve the transaction in your connected wallet to complete the deployment."
+                                                lines.append(f"Gas price: {deployment_result.gas_price_gwei} gwei")
+                                            lines.append(f"Network: Sepolia ({deployment_result.chain_id})")
+                                            lines.append("\nPlease approve the transaction in your wallet to complete the deployment.")
+                                            full_response = "\n".join(lines)
 
                                             final_status = "pending_signature"
                                             structured_response = deployment_result.model_dump()
@@ -462,23 +503,16 @@ async def chat_endpoint(chat_request: ChatRequest, assistant = Depends(get_assis
                                         deployment_request = True
                                         
                                         if mcp_response.get('success'):
-                                            # Create user-friendly deployment preparation message
-                                            full_response = f"🔧 **Deployment Transaction Prepared**\n\n"
-                                            full_response += f"**Contract Ready for Deployment**\n"
+                                            lines = ["Deployment transaction ready."]
                                             if mcp_response.get('estimated_gas'):
-                                                full_response += f"**Estimated Gas:** {mcp_response['estimated_gas']:,}\n"
+                                                lines.append(f"Estimated gas: {mcp_response['estimated_gas']:,}")
                                             if mcp_response.get('gas_price_gwei'):
-                                                full_response += f"**Gas Price:** {mcp_response['gas_price_gwei']} gwei\n"
+                                                lines.append(f"Gas price: {mcp_response['gas_price_gwei']} gwei")
                                             if mcp_response.get('chain_id'):
-                                                full_response += f"**chain_id:** {mcp_response['chain_id']} gwei\n"
-                                            if mcp_response.get('user_address'):
-                                                full_response += f"**user_address:** {mcp_response['user_address']} gwei\n"
+                                                lines.append(f"Network: Sepolia ({mcp_response['chain_id']})")
+                                            full_response = "\n".join(lines)
                                             
-                                            # Include transaction for frontend to handle
-                                            transaction_data = mcp_response.get('transaction', {})
-                                            full_response += f"\n**Transaction Details:**\n```json\n{json.dumps(transaction_data, indent=2)}\n```"
-                                            
-                                            full_response += "\n\n🔔 **Ready to Sign:** Please approve the transaction in your connected wallet to complete the deployment."
+                                            full_response += "\n\nPlease approve the transaction in your wallet to complete the deployment."
                                             
                                             final_status = "pending_signature"
                                             structured_response = mcp_response

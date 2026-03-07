@@ -30,6 +30,7 @@ class ApprovalRequest(BaseModel):
     transaction_data: Dict[str, Any]
     timestamp: datetime
     message: str
+    contract_type: Optional[str] = None
 
 class ApprovalResponse(BaseModel):
     approval_id: str
@@ -69,9 +70,15 @@ async def poll_approval_requests(request: Request):
             logger.info(f"  - {req_id}: processed={req_data.get('processed', False)}")
         
         pending_requests = [
-            ApprovalRequest(**request_data) 
-            for request_data in approval_requests.values()
-            if not request_data.get("processed", False)
+            ApprovalRequest(
+                approval_id=r["approval_id"],
+                transaction_data=r["transaction_data"],
+                timestamp=r["timestamp"],
+                message=r.get("message", ""),
+                contract_type=r.get("contract_type"),
+            )
+            for r in approval_requests.values()
+            if not r.get("processed", False)
         ]
         
         logger.info(f"Returning {len(pending_requests)} pending approval requests")
@@ -135,28 +142,68 @@ async def submit_approval_response(approval_response: ApprovalResponse, request:
             tx_hash = signed_hex.replace("ALREADY_BROADCAST:", "")
             logger.info(f"Transaction already broadcast by wallet. Hash: {tx_hash}")
 
+            is_interaction = approval_data.get("contract_type") == "Contract Function Call"
+
+            if is_interaction:
+                # Contract function call — no deployment record needed
+                return ApprovalSubmitResponse(
+                    success=True,
+                    message=f"Transaction broadcast. Hash: {tx_hash}"
+                )
+
+            # Deployment: fetch contract address from receipt (tx may take a few seconds to confirm)
+            import os as _os
+            from web3 import Web3 as _Web3
+            contract_address = None
+            rpc_url = _os.getenv("ETHEREUM_SEPOLIA_RPC")
+            if rpc_url:
+                _w3 = _Web3(_Web3.HTTPProvider(rpc_url))
+                for _attempt in range(6):  # up to ~30s
+                    try:
+                        import asyncio as _asyncio
+                        await _asyncio.sleep(5 * _attempt)  # 0s, 5s, 10s, 15s, 20s, 25s
+                        receipt = _w3.eth.get_transaction_receipt(tx_hash)
+                        if receipt and receipt.get("contractAddress"):
+                            contract_address = receipt["contractAddress"]
+                            logger.info(f"Got contract address from receipt: {contract_address}")
+                            break
+                    except Exception as _e:
+                        logger.debug(f"Receipt attempt {_attempt+1} failed: {_e}")
+
             # Save deployment record to DB
             try:
                 db = SessionLocal()
                 try:
                     deployment_details = approval_data.get("deployment_details", {})
+                    mcp_comp_id = deployment_details.get("compilation_id")
+                    # compilation_id_ref FK points to compilations.id (DB UUID), not the MCP string
+                    comp_db_id = None
+                    if mcp_comp_id:
+                        comp_row = db_repo.get_compilation_by_mcp_id(db, mcp_comp_id)
+                        if comp_row:
+                            comp_db_id = comp_row.id
+                            logger.info(f"DB: Resolved compilation {mcp_comp_id} → DB id {comp_db_id}")
+                        else:
+                            logger.warning(f"DB: Compilation not found for MCP id {mcp_comp_id}")
                     db_repo.save_deployment(
                         session=db,
-                        compilation_id_ref=None,
+                        compilation_id_ref=comp_db_id,
                         transaction_hash=tx_hash,
+                        contract_address=contract_address,
                         deployer_address=deployment_details.get("user_address"),
                         chain_id=deployment_details.get("chain_id", 11155111),
                         status="deployed",
                     )
-                    logger.info(f"DB: Saved deployment with tx_hash {tx_hash}")
+                    logger.info(f"DB: Saved deployment tx={tx_hash} comp_db_id={comp_db_id} addr={contract_address}")
                 finally:
                     db.close()
             except Exception as db_error:
                 logger.error(f"DB: Error saving deployment: {db_error}")
 
+            addr_msg = f" Contract address: {contract_address}" if contract_address else " (contract address pending confirmation)"
             return ApprovalSubmitResponse(
                 success=True,
-                message=f"Transaction already broadcast by wallet. Hash: {tx_hash}"
+                message=f"Transaction broadcast. Hash: {tx_hash}.{addr_msg}"
             )
 
         # Format the approval response message

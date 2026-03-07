@@ -116,17 +116,43 @@ class OrchestrationAssistant(Assistant):
         agent_output_topic = OutputTopic(name="agent_output_topic")
 
         def _parse_reasoning(msg):
-            """Parse reasoning content from either JSON string or Pydantic object."""
+            """Parse reasoning content from either JSON string or Pydantic object.
+            Handles hybrid GLM output where JSON block is followed by plain-text explanation.
+            """
             if not hasattr(msg, 'content') or not msg.content:
                 return None
             content = msg.content
             if isinstance(content, str):
+                stripped = content.strip()
+                # Fast path: pure JSON
                 try:
-                    parsed = json.loads(content)
-                    print(f"[_parse_reasoning] Parsed from string: {parsed}", flush=True)
+                    parsed = json.loads(stripped)
+                    print(f"[_parse_reasoning] Parsed from string: {str(parsed)[:80]}", flush=True)
                     return parsed
                 except (json.JSONDecodeError, ValueError):
-                    return None
+                    pass
+                # Hybrid path: JSON at the start, extra text after (GLM appends explanation)
+                if stripped.startswith('{'):
+                    try:
+                        decoder = json.JSONDecoder()
+                        parsed, _ = decoder.raw_decode(stripped)
+                        if isinstance(parsed, dict):
+                            print(f"[_parse_reasoning] Extracted leading JSON from hybrid content: {str(parsed)[:80]}", flush=True)
+                            return parsed
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                # Plain-text fallback: GLM returned a conversational response with no JSON.
+                # Default to no special routing so the text reaches output_node as-is.
+                print(f"[_parse_reasoning] Plain-text fallback for content: {stripped[:80]}", flush=True)
+                return {
+                    "reasoning": stripped[:500],
+                    "confidence": 0.5,
+                    "requires_deployment": False,
+                    "requires_contract_generation": False,
+                    "requires_execution": False,
+                    "solidity_code": None,
+                    "compilation_id": None,
+                }
             if isinstance(content, dict):
                 print(f"[_parse_reasoning] Content is dict: {content}", flush=True)
                 return content
@@ -300,8 +326,6 @@ class OrchestrationAssistant(Assistant):
                 .subscribed_to(verification_pass_topic)
                 .or_()
                 .subscribed_to(verification_skip_topic)
-                .or_()
-                .subscribed_to(execution_agent_result_topic)
                 .build()
             )
             .tool(
@@ -635,8 +659,11 @@ class OrchestrationAssistant(Assistant):
                     from routers.wallet import get_wallet_for_conversation
                     db = SessionLocal()
                     try:
+                        wallet_addr_for_lookup = get_wallet_for_conversation(invoke_context.conversation_id)
                         deployments = db_repo.get_deployments_by_conversation(
-                            db, invoke_context.conversation_id
+                            db,
+                            invoke_context.conversation_id,
+                            deployer_address=wallet_addr_for_lookup,
                         )
                         if deployments:
                             deployed_context = "[Deployed contracts:\n"
@@ -720,7 +747,7 @@ class OrchestrationAssistant(Assistant):
                     .build()
                 )
                 .tool(execution_agent_calling_tool)
-                .publish_to(execution_agent_result_topic)
+                .publish_to(agent_output_topic)
                 .build()
             )
 

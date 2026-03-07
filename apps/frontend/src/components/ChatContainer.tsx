@@ -294,10 +294,10 @@ const ChatContainer: React.FC = () => {
 
   const handleApprovalSubmit = async (approvalId: string, approved: boolean, signedTxHex?: string, rejectionReason?: string) => {
     console.log('🔄 Handling approval submission:', { approvalId, approved, hasSignedTx: !!signedTxHex });
-    
+
     try {
-      const success = await submitApproval(approvalId, approved, signedTxHex, rejectionReason);
-      
+      const { success } = await submitApproval(approvalId, approved, signedTxHex, rejectionReason);
+
       if (success) {
         // Create detailed success message with transaction details
         let successContent = '';
@@ -358,6 +358,7 @@ Your smart contract has been successfully deployed and is now live on the blockc
       return false;
     }
   };
+
 
   const handleSendMessage = async (content: string) => {
     if (!content.trim()) return;
